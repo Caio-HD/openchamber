@@ -2,6 +2,7 @@ import type {
   AttachContribution,
   GuestActionContribution,
   GuestCommandContribution,
+  GuestToolContribution,
   PublicService,
   PublicGuestCapabilities,
   PublicIntegration,
@@ -13,7 +14,8 @@ export type InstalledGuest = {
   id: string;
   name: string;
   icon: string;
-  entry: string;
+  /** Panel page. Absent for a page-less (tools-only) extension, which never mounts a frame. */
+  entry?: string;
   /** npm package.json version when the package declared one. */
   version?: string;
   attach?: AttachContribution;
@@ -27,6 +29,8 @@ export type InstalledGuest = {
   actions?: GuestActionContribution[];
   /** Declared `contributes.commands`; the composer routes them only for an active guest. */
   commands?: GuestCommandContribution[];
+  /** Declared `contributes.tools`; the chat applies them only for an active guest. */
+  tools?: GuestToolContribution[];
   /** What the package asks for and what the user approved at install. */
   capabilities: PublicGuestCapabilities;
   source?: GuestSource;

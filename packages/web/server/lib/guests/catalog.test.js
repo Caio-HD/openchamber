@@ -205,6 +205,75 @@ describe('listInstalledGuests', () => {
   });
 });
 
+describe('page-less packages', () => {
+  test('installs a tools-only package without entry, omits entry from the row, and never serves it a frame', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-'));
+    const guestRoot = path.join(dir, 'tools-only');
+    await fs.mkdir(path.join(guestRoot, 'icons'), { recursive: true });
+    await fs.writeFile(path.join(guestRoot, 'icons', 'tool.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    await fs.writeFile(path.join(guestRoot, 'stray.html'), '<script src="./stray.js"></script>');
+    await fs.writeFile(path.join(guestRoot, 'stray.js'), 'console.log(1)');
+    await fs.writeFile(path.join(guestRoot, 'package.json'), JSON.stringify({
+      name: '@openchamber/tools-only',
+      version: '1.0.0',
+      openchamber: {
+        apiVersion: 1,
+        contributes: {
+          panel: { id: 'tools-only', name: 'Tools Only', icon: 'tools' },
+          tools: [{ match: 'mcp.*', icon: 'icons/tool.svg', output: 'json' }],
+        },
+      },
+    }));
+
+    const inspected = await inspectGuestPackage(guestRoot, { openchamberVersion: '1.0.0' });
+    expect(inspected).toEqual({
+      ok: true,
+      guest: {
+        id: 'tools-only',
+        name: 'Tools Only',
+        icon: 'tools',
+        packageRoot: guestRoot,
+        version: '1.0.0',
+        tools: [{ match: 'mcp.*', icon: 'icons/tool.svg', output: 'json' }],
+      },
+    });
+    if (!inspected.ok) {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    }
+    const row = toPublicGuest({ ...inspected.guest, source: 'path', path: guestRoot });
+    expect(row).not.toHaveProperty('entry');
+    expect(row.tools).toEqual([{ match: 'mcp.*', icon: 'icons/tool.svg', output: 'json' }]);
+
+    const hasPage = false;
+    expect((await resolveGuestServedFile(guestRoot, 'icons/tool.svg', { hasPage }))?.contentType).toBe('image/svg+xml');
+    expect(await resolveGuestServedFile(guestRoot, 'stray.html', { hasPage })).toBeNull();
+    expect(await resolveGuestServedFile(guestRoot, 'stray.js', { hasPage })).toBeNull();
+    expect((await resolveGuestServedFile(guestRoot, 'stray.html', { hasPage: true }))?.contentType).toContain('html');
+
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('refuses a page-less package that declares a page-only contribution', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-'));
+    const guestRoot = path.join(dir, 'no-entry');
+    await fs.mkdir(guestRoot, { recursive: true });
+    await fs.writeFile(path.join(guestRoot, 'package.json'), JSON.stringify({
+      name: '@openchamber/no-entry',
+      version: '1.0.0',
+      openchamber: {
+        apiVersion: 1,
+        contributes: {
+          panel: { id: 'no-entry', name: 'No Entry', icon: 'tools' },
+          attach: 'dialog',
+        },
+      },
+    }));
+    expect(await inspectGuestPackage(guestRoot, { openchamberVersion: '1.0.0' })).toEqual({ ok: false, code: 'invalid-manifest' });
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
 describe('actions and commands on the public row', () => {
   test('copies declared actions and commands and asks for conversation when a session action wants messages', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-'));
@@ -216,6 +285,9 @@ describe('actions and commands on the public row', () => {
       { id: 'summarize', label: 'Summarize', where: 'session', payload: ['messages'] },
     ];
     pkg.openchamber.contributes.commands = [{ name: 'task', description: 'Attach a task' }];
+    pkg.openchamber.contributes.tools = [
+      { match: 'mcp.tasks.*', name: 'Tasks', icon: 'checkbox-circle', title: '{input.id}', output: 'table', columns: ['id', 'title'] },
+    ];
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(pkg));
 
     const inspected = await inspectGuestPackage(root);
@@ -224,6 +296,7 @@ describe('actions and commands on the public row', () => {
       const row = toPublicGuest({ ...inspected.guest, source: 'path', path: root, capabilityGrants: [] });
       expect(row.actions).toEqual(pkg.openchamber.contributes.actions);
       expect(row.commands).toEqual(pkg.openchamber.contributes.commands);
+      expect(row.tools).toEqual(pkg.openchamber.contributes.tools);
       expect(row.capabilities).toEqual({ requested: ['conversation'], granted: [] });
     }
 

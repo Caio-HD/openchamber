@@ -1,5 +1,5 @@
 import React from 'react';
-import { resolveAttachMode, type AttachMode } from '@openchamber/sdk';
+import { hasGuestPage, resolveAttachMode, type AttachMode } from '@openchamber/sdk';
 
 import type { IconName } from '@/components/icon/icons';
 import { isVSCodeRuntime } from '@/lib/desktop';
@@ -90,7 +90,7 @@ export const useGuestAttachItems = (): GuestAttachItem[] => {
     const authenticatedAsset = getRuntimeUrlResolver().authenticatedAsset;
     const items: GuestAttachItem[] = [];
     for (const guest of guests) {
-      if (!isGuestActive(guest)) continue;
+      if (!isGuestActive(guest) || !hasGuestPage({ panel: guest })) continue;
       const mode = resolveAttachMode(guest.attach);
       if (!mode) continue;
       items.push({

@@ -236,7 +236,11 @@ const ExtensionCard: React.FC<ExtensionCardProps> = ({
   );
   // The path is one unbreakable word; it lives in the expanded body so the
   // header line never clamps right after the version.
-  const meta = [t(sourceKey(guest.source)), guest.version ? `v${guest.version}` : null].filter(Boolean).join(' · ');
+  const meta = [
+    t(sourceKey(guest.source)),
+    guest.version ? `v${guest.version}` : null,
+    guest.entry ? null : t('settings.extensions.source.noPanel'),
+  ].filter(Boolean).join(' · ');
   const location = guest.path || guest.id;
   const statusLabel = needsApproval
     ? t('settings.extensions.status.needsApproval')

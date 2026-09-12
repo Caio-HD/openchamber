@@ -2429,6 +2429,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolOutputDialog.noOutputProduced': '没有产生输出',
   'chat.toolPart.lspErrors': 'LSP 错误',
   'chat.toolPart.moreErrors': '+{count} 个更多错误',
+  'chat.toolPart.moreRows': '+{count} 行更多',
   'chat.toolPart.error': '错误：',
   'chat.toolPart.awaitingResponse': '等待响应...',
   'chat.toolPart.noOutputProduced': '未产生输出',

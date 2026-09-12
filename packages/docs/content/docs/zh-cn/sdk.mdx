@@ -79,7 +79,7 @@ OpenChamber 会读取清单，并弹出一个对话框列出扩展所请求的�
 
 `engines.openchamber` 可选。填写你的扩展支持的最低 OpenChamber 版本，写成 `1.24.0` 或 `>=1.24.0`。更旧的版本会拒绝安装，而不是之后才出错。
 
-`contributes.panel` 描述侧栏入口。`id` 使用 kebab-case，且在已安装扩展中必须唯一。`icon` 是 Remixicon 图标名（`RiWindowLine` 写成 `window`），或者你文件夹内的 SVG 文件，如 `icon.svg`。`entry` 是你文件夹内的 HTML 文件。
+`contributes.panel` 描述侧栏入口。`id` 使用 kebab-case，且在已安装扩展中必须唯一。`icon` 是 Remixicon 图标名（`RiWindowLine` 写成 `window`），或者你文件夹内的 SVG 文件，如 `icon.svg`。`entry` 是你文件夹内的 HTML 文件；只声明 `tools` 的扩展可以不写它（见[你的工具在聊天中的样子](#你的工具在聊天中的样子)）。
 
 `contributes.attach` 可选。它会把你的扩展加入聊天框旁的 + 菜单，用户可以从中挑选一个任务并附加到会话。
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 当用户在聊天框中输入 `/task ABC-12` 时，OpenChamber 会请你的扩展解析它，并把你返回的内容作为标签附加上去，不打开任何东西。找不到时返回 `null`。如果你的面板是关闭的，OpenChamber 会为这次调用在后台加载它。OpenChamber 或 OpenCode 已经使用的名称会被忽略。
 
 **侧栏图标上的徽标。** `host.setBadge(3)` 在你的图标上显示一个数字，比如未完成任务数；`host.setBadge(null)` 清除它。打开面板也会清除它。
+
+## 你的工具在聊天中的样子
+
+当你的 OpenCode 插件或 MCP 服务器添加一个工具时，聊天会用通用图标和原始输出来显示它的调用。改为声明它们应该长什么样，不需要写代码：
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match` 是 OpenCode 报告的工具名；末尾的 `*` 匹配前缀。`icon` 是 Remixicon 图标名或你包内的 `.svg` 文件，和 `panel.icon` 一样。`title` 和 `subtitle` 是基于这次调用的 `input`、`output` 和 `metadata` 的模板。`output` 决定正文怎么渲染：`text`、`json`（树形）、`markdown`、带 `language` 的 `code`、带 `columns` 的 `table`（行来自输出数组或 `output.items`），或者 `auto` 使用默认方式。精确的 `match` 优先于通配符，平局时先安装的扩展胜出。不需要任何权限：这只改变聊天里已有数据的绘制方式。
+
+只给工具定制样式的扩展根本不需要页面：不写 `panel.entry`，它就没有侧栏图标，只在 设置 → 扩展 里有一张卡片。没有页面时，它可以只声明 `tools`，别的什么都不写。
 
 ## 面板里的前几行代码
 

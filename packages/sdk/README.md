@@ -55,6 +55,7 @@ A complete three-file example is on the [Build an extension](https://openchamber
         { "id": "summarize", "label": "Summarize session", "where": "session", "payload": ["messages"] }
       ],
       "commands": [{ "name": "task", "description": "Attach a task by id" }],
+      "tools": [{ "match": "mcp.tasks.*", "name": "Tasks", "icon": "checkbox-circle", "title": "{input.id}", "output": "table", "columns": ["id", "title", "status"] }],
       "integration": {
         "name": "Acme",
         "description": "Tasks from Acme",
@@ -73,10 +74,11 @@ A complete three-file example is on the [Build an extension](https://openchamber
 - `version` is required semver. Settings → Extensions shows it on the card.
 - `apiVersion` is `1`. Anything else is refused.
 - `engines.openchamber` is optional (`1.24.0` or `>=1.24.0`). Older OpenChamber builds refuse the install.
-- `panel.id` is kebab-case and unique. `icon` is a Remixicon name (`RiWindowLine` becomes `window`) or an SVG inside the folder. `entry` is the HTML file inside the folder.
+- `panel.id` is kebab-case and unique. `icon` is a Remixicon name (`RiWindowLine` becomes `window`) or an SVG inside the folder. `entry` is the HTML file inside the folder. Leave `entry` out for an extension that only declares `tools`: it gets no rail icon or page, just its tool rules in the chat (`examples/tools-only`).
 - `attach` is optional. `"dialog"` opens the page in a window from the + menu next to the chat box; `true` or `"panel"` opens the rail panel instead. `ctx.surface` tells the page which one it is in. The object form `{ "mode": "dialog", "entry": "panel/attach.html" }` gives the window its own page. When the user clicks the attached chip, the page opens again with that item in `ctx.item` (`null` from the + menu), so it can show the item instead of the list.
 - `actions` is optional: menu entries on messages (`where: "message"`, optionally only `roles: ["assistant"]`) and on sessions (`where: "session"`). Picking one opens your page with that message or session in `ctx.item` (`kind: "message"` with the text, or `kind: "session"`; add `payload: ["messages"]` to get the conversation too). Up to 8.
 - `commands` is optional: slash commands for the chat box, up to 8. `/task DEMO-2` calls your `host.onResolve` handler instead of the model; return a chip to attach it, or `null` for nothing. A name the app already has is ignored.
+- `tools` is optional: how your tool calls look in the chat, up to 16, no code. `match` is the tool name OpenCode reports (`mcp.tasks.*` matches every tool under that prefix); `name` and `icon` (a Remixicon name or an SVG inside the folder, like `panel.icon`) set the header, `title` and `subtitle` are templates like `{input.id}` or `{output.total} open`, and `output` picks the body: `text`, `json`, `markdown`, `code` (with `language`), or `table` (with `columns`, rows from the output array or `output.items`). Leave `output` out to keep the app's own detection.
 - `capabilities` lists what needs the user's approval: `prompt` to send messages, `sessions` to create sessions and worktrees, `files` to read and write inside the open project. An `integration` adds `network`, a `service` adds `service`, `filesystem` patterns (like `["~/.config/opencode/opencode.json"]`) add `filesystem`, which lets `readFile`, `writeFile`, `listDir`, and `stat` reach those paths outside the project, and a session action with `payload: ["messages"]` adds `conversation`. The user approves the whole list once at install. Calls outside it fail with `NOT_GRANTED`.
 - `integration` is optional. It adds a card at Settings → Integrations. `token` takes a pasted API token (`scheme: "bearer"` for `Authorization: Bearer`, `"basic"` for a username and token pair as Jira Cloud wants), `oauth` runs an authorize flow with a pasted client id, and `host: { "provider": "linear" }` reuses the Linear account already connected in OpenChamber. The page never sees the token; OpenChamber makes the calls through `host.request`.
 - `service` is optional. It declares a local process OpenChamber starts next to the extension. See [GUEST_SERVICES.md](./GUEST_SERVICES.md).

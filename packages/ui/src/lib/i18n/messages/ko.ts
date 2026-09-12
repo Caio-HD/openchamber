@@ -2463,6 +2463,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolOutputDialog.noOutputProduced': '출력 없음',
   'chat.toolPart.lspErrors': 'LSP 오류',
   'chat.toolPart.moreErrors': '+오류 {count}개 더 보기',
+  'chat.toolPart.moreRows': '+행 {count}개 더 보기',
   'chat.toolPart.error': '오류:',
   'chat.toolPart.awaitingResponse': '응답 대기 중…',
   'chat.toolPart.noOutputProduced': '출력 없음',

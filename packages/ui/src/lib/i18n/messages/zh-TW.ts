@@ -2433,6 +2433,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolOutputDialog.noOutputProduced': '沒有產生輸出',
   'chat.toolPart.lspErrors': 'LSP 錯誤',
   'chat.toolPart.moreErrors': '+{count} 個更多錯誤',
+  'chat.toolPart.moreRows': '+{count} 行更多',
   'chat.toolPart.error': '錯誤：',
   'chat.toolPart.awaitingResponse': '等待回應...',
   'chat.toolPart.noOutputProduced': '未產生輸出',

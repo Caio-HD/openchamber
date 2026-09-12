@@ -168,6 +168,24 @@ describe('parseGuestCatalogJson', () => {
     ]);
   });
 
+  test('keeps declared tool presentations and drops a malformed list', () => {
+    const tools = [
+      { match: 'mcp.tasks.*', name: 'Tasks', icon: 'checkbox-circle', title: '{input.id}', output: 'table', columns: ['id', 'title'] },
+      { match: 'jira_search', output: 'code', language: 'json' },
+    ];
+    const guest = (extra: Record<string, unknown>) => ({
+      id: 'hello',
+      name: 'Hello',
+      icon: 'window',
+      entry: 'panel/index.html',
+      capabilities: { requested: [], granted: [] },
+      ...extra,
+    });
+    expect(parseGuestCatalogJson(JSON.stringify({ guests: [guest({ tools })] }))).toEqual([guest({ tools })]);
+    expect(parseGuestCatalogJson(JSON.stringify({ guests: [guest({ tools: [{ match: 'mcp.*.search' }] })] }))).toBeNull();
+    expect(parseGuestCatalogJson(JSON.stringify({ guests: [guest({ tools: [{ match: 'x', output: 'html' }] })] }))).toBeNull();
+  });
+
   test('rejects junk instead of returning an empty catalog', () => {
     expect(parseGuestCatalogJson('null')).toBeNull();
     expect(parseGuestCatalogJson('{"guests":[{"id":"Nope"}]}')).toBeNull();

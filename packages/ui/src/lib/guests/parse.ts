@@ -1,4 +1,12 @@
-import { GUEST_ACTIONS_MAX, GUEST_CAPABILITIES, GUEST_COMMANDS_MAX, GUEST_COMMAND_NAME } from '@openchamber/sdk';
+import {
+  GUEST_ACTIONS_MAX,
+  GUEST_CAPABILITIES,
+  GUEST_COMMANDS_MAX,
+  GUEST_COMMAND_NAME,
+  GUEST_TOOLS_MAX,
+  GUEST_TOOL_MATCH,
+  GUEST_TOOL_OUTPUTS,
+} from '@openchamber/sdk';
 import { z } from 'zod';
 
 import type { InstalledGuest } from './types.ts';
@@ -50,6 +58,17 @@ const guestCommandSchema = z.object({
   description: z.string().trim().min(1).optional(),
 });
 
+const guestToolSchema = z.object({
+  match: z.string().regex(GUEST_TOOL_MATCH),
+  name: z.string().trim().min(1).optional(),
+  icon: z.string().trim().min(1).optional(),
+  title: z.string().trim().min(1).optional(),
+  subtitle: z.string().trim().min(1).optional(),
+  output: z.enum(GUEST_TOOL_OUTPUTS).optional(),
+  language: z.string().trim().min(1).optional(),
+  columns: z.array(z.string().trim().min(1)).optional(),
+});
+
 export const guestUpdateSchema = z.object({
   version: z.string().trim().min(1).max(64),
 });
@@ -58,7 +77,7 @@ const installedGuestSchema = z.object({
   id: z.string().regex(PANEL_ID),
   name: z.string().trim().min(1),
   icon: z.string().trim().min(1),
-  entry: z.string().trim().min(1),
+  entry: z.string().trim().min(1).optional(),
   version: z.string().trim().min(1).max(64).optional(),
   attach: z.union([z.boolean(), z.enum(['panel', 'dialog'])]).optional(),
   attachEntry: z.string().trim().min(1).optional(),
@@ -67,6 +86,7 @@ const installedGuestSchema = z.object({
   service: publicServiceSchema.optional(),
   actions: z.array(guestActionSchema).max(GUEST_ACTIONS_MAX).optional(),
   commands: z.array(guestCommandSchema).max(GUEST_COMMANDS_MAX).optional(),
+  tools: z.array(guestToolSchema).max(GUEST_TOOLS_MAX).optional(),
   capabilities: z.object({
     requested: z.array(z.enum(GUEST_CAPABILITIES)),
     granted: z.array(z.enum(GUEST_CAPABILITIES)),

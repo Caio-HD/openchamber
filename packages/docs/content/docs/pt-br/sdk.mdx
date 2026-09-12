@@ -79,7 +79,7 @@ Você também pode adicionar um `.zip` local ou um link https para um repositór
 
 `engines.openchamber` é opcional. Informe a versão mais antiga do OpenChamber com a qual sua extensão funciona, como `1.24.0` ou `>=1.24.0`. Versões anteriores se recusam a instalá-la em vez de falhar depois.
 
-`contributes.panel` descreve a entrada na barra lateral. `id` é em kebab-case e precisa ser único entre as extensões instaladas. `icon` é um nome do Remixicon (`RiWindowLine` vira `window`) ou um arquivo SVG dentro da sua pasta, como `icon.svg`. `entry` é o arquivo HTML dentro da sua pasta.
+`contributes.panel` descreve a entrada na barra lateral. `id` é em kebab-case e precisa ser único entre as extensões instaladas. `icon` é um nome do Remixicon (`RiWindowLine` vira `window`) ou um arquivo SVG dentro da sua pasta, como `icon.svg`. `entry` é o arquivo HTML dentro da sua pasta; deixe-o de fora em uma extensão que só declara `tools` (veja [Suas ferramentas no chat](#suas-ferramentas-no-chat)).
 
 `contributes.attach` é opcional. Ele adiciona sua extensão ao menu + ao lado da caixa de chat, para o usuário escolher uma tarefa e anexá-la a uma sessão.
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 Quando o usuário digita `/task ABC-12` na caixa de chat, o OpenChamber pede à sua extensão que o resolva e anexa o que você devolve como um chip, sem abrir nada. Devolva `null` para "nada encontrado". Se o seu painel estiver fechado, o OpenChamber o carrega em segundo plano para essa chamada. Um nome que o OpenChamber ou o OpenCode já usa é ignorado.
 
 **Selo no ícone da barra lateral.** `host.setBadge(3)` mostra um número no seu ícone, por exemplo tarefas abertas; `host.setBadge(null)` o limpa. Abrir o painel também o limpa.
+
+## Suas ferramentas no chat
+
+Quando o seu plugin do OpenCode ou servidor MCP adiciona uma ferramenta, o chat mostra as chamadas dela com um ícone genérico e a saída bruta. Em vez disso, declare como elas devem aparecer, sem código:
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match` é o nome da ferramenta como o OpenCode o reporta; um `*` no final casa com um prefixo. `icon` é um nome do Remixicon ou um arquivo `.svg` no seu pacote, como `panel.icon`. `title` e `subtitle` são templates sobre `input`, `output` e `metadata` da chamada. `output` escolhe como o corpo é renderizado: `text`, `json` (uma árvore), `markdown`, `code` com um `language`, `table` com `columns` (as linhas vêm do array de saída ou de `output.items`) ou `auto` para o padrão. Um `match` exato vence um curinga, e em caso de empate vence a primeira extensão instalada. Nenhuma permissão é necessária: isso só muda como dados que já estão no chat são desenhados.
+
+Uma extensão que só estiliza ferramentas não precisa de página nenhuma: deixe `panel.entry` de fora e ela não terá ícone na barra lateral, só um card em Configurações → Extensões. Sem página ela pode declarar `tools` e nada mais.
 
 ## Primeiras linhas no painel
 

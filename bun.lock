@@ -177,6 +177,13 @@
         "@openchamber/sdk": "workspace:*",
       },
     },
+    "packages/sdk/examples/tools-only": {
+      "name": "@openchamber/example-tools-only",
+      "version": "1.0.0",
+      "dependencies": {
+        "@openchamber/sdk": "workspace:*",
+      },
+    },
     "packages/ui": {
       "name": "@openchamber/ui",
       "version": "1.23.1",
@@ -1057,6 +1064,8 @@
     "@openchamber/example-service-echo": ["@openchamber/example-service-echo@workspace:packages/sdk/examples/service-echo"],
 
     "@openchamber/example-tasks-demo": ["@openchamber/example-tasks-demo@workspace:packages/sdk/examples/tasks-demo"],
+
+    "@openchamber/example-tools-only": ["@openchamber/example-tools-only@workspace:packages/sdk/examples/tools-only"],
 
     "@openchamber/mobile": ["@openchamber/mobile@workspace:packages/mobile"],
 

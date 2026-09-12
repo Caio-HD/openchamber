@@ -79,7 +79,7 @@ OpenChamber がマニフェストを読み、拡張機能が求めているも�
 
 `engines.openchamber` は任意です。拡張機能が動作する最も古い OpenChamber のバージョンを、`1.24.0` または `>=1.24.0` の形で指定します。古いビルドは、後で失敗する代わりにインストール自体を拒否します。
 
-`contributes.panel` はレールの項目を記述します。`id` は kebab-case で、インストール済みの拡張機能の中で一意でなければなりません。`icon` は Remixicon の名前(`RiWindowLine` なら `window`)か、フォルダ内の SVG ファイル(`icon.svg` など)です。`entry` はフォルダ内の HTML ファイルです。
+`contributes.panel` はレールの項目を記述します。`id` は kebab-case で、インストール済みの拡張機能の中で一意でなければなりません。`icon` は Remixicon の名前(`RiWindowLine` なら `window`)か、フォルダ内の SVG ファイル(`icon.svg` など)です。`entry` はフォルダ内の HTML ファイルです。`tools` だけを宣言する拡張機能では省略してください([チャットに表示されるあなたのツール](#チャットに表示されるあなたのツール) を参照)。
 
 `contributes.attach` は任意です。チャット欄の横にある + メニューに拡張機能を追加し、ユーザーがタスクを選んでセッションに添付できるようにします。
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 ユーザーがチャット欄に `/task ABC-12` と入力すると、OpenChamber は拡張機能に解決を依頼し、返された内容を何も開かずにチップとして添付します。何も見つからなければ `null` を返してください。パネルが閉じていれば、OpenChamber はこの呼び出しのためにバックグラウンドで読み込みます。OpenChamber や OpenCode がすでに使っている名前は無視されます。
 
 **レールのアイコン上のバッジ。** `host.setBadge(3)` はアイコンに数字(たとえば未処理のタスク数)を表示し、`host.setBadge(null)` はそれを消します。パネルを開いても消えます。
+
+## チャットに表示されるあなたのツール
+
+あなたの OpenCode プラグインや MCP サーバーがツールを追加すると、チャットはその呼び出しを汎用アイコンと生の出力で表示します。代わりに、コードなしでどう見せるかを宣言します。
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match` は OpenCode が報告するツール名で、末尾の `*` は前方一致です。`icon` は Remixicon の名前か、パッケージ内の `.svg` ファイルで、`panel.icon` と同じです。`title` と `subtitle` は呼び出しの `input`、`output`、`metadata` を使うテンプレートです。`output` は本文の描画方法を選びます。`text`、`json`(ツリー)、`markdown`、`language` 付きの `code`、`columns` 付きの `table`(行は出力の配列か `output.items` から取られます)、または既定の `auto` です。完全一致の `match` はワイルドカードより優先され、同点なら先にインストールされた拡張機能が勝ちます。権限は要りません。これはすでにチャットにあるデータの描き方を変えるだけです。
+
+ツールの見た目を整えるだけの拡張機能にはページはまったく不要です。`panel.entry` を省略すると、レールにアイコンは出ず、設定 → 拡張機能 にカードが表示されるだけになります。ページがない場合は `tools` だけを宣言して他は何も宣言しなくて構いません。
 
 ## パネルの最初の数行
 

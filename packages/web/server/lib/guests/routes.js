@@ -700,7 +700,9 @@ export const registerGuestRoutes = (app, {
       } catch {
         return res.status(404).end();
       }
-      const served = await resolveGuestServedFile(guest.packageRoot, relativePath);
+      const served = await resolveGuestServedFile(guest.packageRoot, relativePath, {
+        hasPage: Boolean(guest.entry),
+      });
       if (!served) {
         return res.status(404).end();
       }

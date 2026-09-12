@@ -2,11 +2,16 @@ import type { OpenChamberManifestApiVersion } from './api-version.ts';
 
 export const PANEL_ID = /^[a-z][a-z0-9-]*$/;
 
+/**
+ * The extension's identity on the rail, the Extensions card, and the approval
+ * dialog. `entry` is the panel page; without it the extension has no page and
+ * may only declare `tools` (see `hasGuestPage`).
+ */
 export type PanelContribution = {
   id: string;
   name: string;
   icon: string;
-  entry: string;
+  entry?: string;
 };
 
 export type AttachMode = 'panel' | 'dialog';
@@ -60,6 +65,54 @@ export type GuestActionContribution = {
 export type GuestCommandContribution = {
   name: string;
   description?: string;
+};
+
+/** How many `contributes.tools` entries a package may declare. */
+export const GUEST_TOOLS_MAX = 16;
+/** Characters in a `contributes.tools` `match`. */
+export const GUEST_TOOL_MATCH_MAX = 128;
+/**
+ * A tool name as OpenCode reports it (`mcp.jira.search`, `jira_search`),
+ * with `*` allowed once, at the end, as a suffix wildcard (`mcp.jira.*`).
+ */
+export const GUEST_TOOL_MATCH = /^[A-Za-z0-9_.:-]+\*?$/;
+/** Characters in a tool `name`. */
+export const GUEST_TOOL_NAME_MAX = 40;
+/** Characters in a `title` or `subtitle` template. */
+export const GUEST_TOOL_TEMPLATE_MAX = 200;
+/** Characters a substituted `{input.path}` value may take in a rendered template. */
+export const GUEST_TOOL_TEMPLATE_VALUE_MAX = 200;
+/** Characters in a `code` language id. */
+export const GUEST_TOOL_LANGUAGE_MAX = 32;
+/** How many `columns` a `table` presentation may name. */
+export const GUEST_TOOL_COLUMNS_MAX = 16;
+/** Characters in one column path. */
+export const GUEST_TOOL_COLUMN_MAX = 64;
+
+export const GUEST_TOOL_OUTPUTS = ['auto', 'text', 'json', 'markdown', 'code', 'table'] as const;
+
+/** How the expanded body of a matched tool call renders. `auto` keeps the host's own detection. */
+export type GuestToolOutput = (typeof GUEST_TOOL_OUTPUTS)[number];
+
+/**
+ * How a tool call looks in the chat, declared without code. `match` is the
+ * full tool name OpenCode reports, or a prefix ending in `*`. `title` and
+ * `subtitle` are templates with `{input.path}`, `{output.path}`, and
+ * `{metadata.path}` placeholders; a missing path renders as an empty string.
+ * `language` only means something for `output: "code"` and `columns` only
+ * for `output: "table"` (rows are the output array or `output.items`).
+ */
+export type GuestToolContribution = {
+  match: string;
+  /** Header title when `title` is absent or renders empty. */
+  name?: string;
+  /** Remixicon name or package `.svg` path, same rules as `panel.icon`. */
+  icon?: string;
+  title?: string;
+  subtitle?: string;
+  output?: GuestToolOutput;
+  language?: string;
+  columns?: string[];
 };
 
 export type IntegrationSettingField = {
@@ -276,6 +329,8 @@ export type OpenChamberContributes = {
   actions?: GuestActionContribution[];
   /** Composer slash commands that attach a chip. */
   commands?: GuestCommandContribution[];
+  /** How the extension's tool calls look in the chat. */
+  tools?: GuestToolContribution[];
 };
 
 /** Whether any declared action asks for a session's messages, which needs `conversation`. */
@@ -299,6 +354,16 @@ export const requestedGuestCapabilities = (
   if (contributes.filesystem && contributes.filesystem.length > 0) declared.add('filesystem');
   return GUEST_CAPABILITIES.filter((capability) => declared.has(capability));
 };
+
+/**
+ * Whether the package ships a panel page. A page-less package (no
+ * `panel.entry`) never mounts an iframe: no rail surface, attach row, action,
+ * command, service, integration, or capability; parse refuses those without
+ * an entry. `tools` is the only contribution it may carry.
+ */
+export const hasGuestPage = (
+  contributes: Pick<OpenChamberContributes, 'panel'>,
+): boolean => Boolean(contributes.panel.entry);
 
 export const isGuestApproved = (capabilities: PublicGuestCapabilities): boolean => (
   capabilities.requested.every((capability) => capabilities.granted.includes(capability))
@@ -351,6 +416,7 @@ export type ParseManifestErrorCode =
   | 'invalid-engines'
   | 'invalid-version'
   | 'missing-panel'
+  | 'invalid-panel'
   | 'invalid-panel-id'
   | 'invalid-panel-name'
   | 'invalid-panel-icon'
@@ -361,7 +427,8 @@ export type ParseManifestErrorCode =
   | 'invalid-service'
   | 'invalid-filesystem'
   | 'invalid-actions'
-  | 'invalid-commands';
+  | 'invalid-commands'
+  | 'invalid-tools';
 
 export type ParseManifestFailure = {
   ok: false;

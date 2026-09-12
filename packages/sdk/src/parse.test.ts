@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { OPENCHAMBER_SDK_API_VERSION } from './api-version.ts';
-import { requestedGuestCapabilities, resolveAttachEntry, resolveAttachMode, resolveIntegrationApi, toPublicIntegration } from './manifest.ts';
+import { hasGuestPage, requestedGuestCapabilities, resolveAttachEntry, resolveAttachMode, resolveIntegrationApi, toPublicIntegration, type OpenChamberContributes } from './manifest.ts';
 import { parseManifest, parseManifestJson } from './parse.ts';
 
 const validBlock = {
@@ -785,5 +785,115 @@ describe('contributes.actions and contributes.commands', () => {
     for (const commands of cases) {
       expect(withContributes({ commands })).toMatchObject({ ok: false, code: 'invalid-commands' });
     }
+  });
+});
+
+describe('contributes.tools', () => {
+  const withTools = (tools: unknown) => parseManifest({
+    apiVersion: 1,
+    contributes: { panel: validBlock.contributes.panel, tools },
+  });
+
+  test('reads tool presentations as declared', () => {
+    const tools = [
+      { match: 'mcp.tasks.*', name: 'Tasks', icon: 'checkbox-circle', title: '{input.id}', output: 'table', columns: ['id', 'title', 'status'] },
+      { match: 'jira_search', subtitle: '{input.query} ({output.total})', output: 'code', language: 'json' },
+      { match: 'notes:read', output: 'markdown' },
+      { match: 'plain' },
+      { match: 'svg', icon: 'icons/tool.svg' },
+    ];
+    const result = withTools(tools);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.contributes.tools).toEqual(tools);
+    }
+  });
+
+  test('rejects malformed tools as invalid-tools', () => {
+    const cases: unknown[] = [
+      [],
+      [{}],
+      [{ match: '' }],
+      [{ match: '*' }],
+      [{ match: 'mcp.*.search' }],
+      [{ match: 'mcp jira' }],
+      [{ match: 'a'.repeat(129) }],
+      [{ match: 'x', name: '' }],
+      [{ match: 'x', name: 'n'.repeat(41) }],
+      [{ match: 'x', icon: 'https://x.test/icon.svg' }],
+      [{ match: 'x', icon: '../icon.svg' }],
+      [{ match: 'x', icon: 'icon.png' }],
+      [{ match: 'x', title: 't'.repeat(201) }],
+      [{ match: 'x', output: 'html' }],
+      [{ match: 'x', output: 'text', language: 'json' }],
+      [{ match: 'x', output: 'table' }],
+      [{ match: 'x', output: 'json', columns: ['id'] }],
+      [{ match: 'x', output: 'table', columns: [] }],
+      [{ match: 'x', output: 'table', columns: new Array(17).fill('c') }],
+      new Array(17).fill(null).map((_, index) => ({ match: `t-${index}` })),
+    ];
+    for (const tools of cases) {
+      expect(withTools(tools)).toMatchObject({ ok: false, code: 'invalid-tools' });
+    }
+  });
+});
+
+describe('page-less extensions', () => {
+  const pageless = { id: 'tools-only', name: 'Tools Only', icon: 'tools' };
+  const withContributes = (extra: Partial<Omit<OpenChamberContributes, 'panel'>>) => parseManifest({
+    apiVersion: 1,
+    contributes: { panel: pageless, ...extra },
+  });
+
+  test('accepts a panel without entry that only declares tools', () => {
+    const result = withContributes({ tools: [{ match: 'mcp.*', output: 'json' }] });
+    expect(result).toEqual({
+      ok: true,
+      manifest: {
+        apiVersion: 1,
+        contributes: {
+          panel: pageless,
+          tools: [{ match: 'mcp.*', output: 'json' }],
+        },
+      },
+    });
+    if (result.ok) {
+      expect(hasGuestPage(result.manifest.contributes)).toBe(false);
+    }
+    expect(withContributes({ attach: false, capabilities: [] })).toMatchObject({ ok: true });
+    expect(hasGuestPage(validBlock.contributes)).toBe(true);
+  });
+
+  test('refuses every page-only contribution without entry as invalid-panel', () => {
+    const cases: Partial<Omit<OpenChamberContributes, 'panel'>>[] = [
+      { attach: true },
+      { attach: 'panel' },
+      { attach: 'dialog' },
+      { attach: { mode: 'dialog', entry: 'panel/attach.html' } },
+      { actions: [{ id: 'a', label: 'A', where: 'message' }] },
+      { commands: [{ name: 'task' }] },
+      { service: { entry: 'service/main.js', runtime: 'host' } },
+      { integration: { name: 'X', description: 'Y', token: { apiOrigin: 'https://api.x.test' } } },
+      { capabilities: ['prompt'] },
+      { capabilities: ['sessions'] },
+      { capabilities: ['files'] },
+      { filesystem: ['~/.config/x/**'] },
+    ];
+    for (const extra of cases) {
+      const result = withContributes({ ...extra, tools: [{ match: 'mcp.*' }] });
+      expect(result).toMatchObject({ ok: false, code: 'invalid-panel' });
+      if (!result.ok) {
+        expect(result.message).toContain('needs panel.entry');
+      }
+    }
+  });
+
+  test('still reports a malformed page-only field by its own code', () => {
+    const bogusAttach = parseManifestJson(JSON.stringify({
+      apiVersion: 1,
+      contributes: { panel: pageless, attach: 'bogus' },
+    }));
+    expect(bogusAttach).toMatchObject({ ok: false, code: 'invalid-attach' });
+    expect(withContributes({ commands: [] })).toMatchObject({ ok: false, code: 'invalid-commands' });
   });
 });

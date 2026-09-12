@@ -44,6 +44,20 @@
           "name": "task",
           "description": "Attach a task by id, e.g. /task DEMO-2"
         }
+      ],
+      "tools": [
+        {
+          "match": "mcp.tasks.*",
+          "name": "Tasks",
+          "icon": "checkbox-circle",
+          "title": "{input.id}",
+          "output": "table",
+          "columns": [
+            "id",
+            "title",
+            "status"
+          ]
+        }
       ]
     }
   },

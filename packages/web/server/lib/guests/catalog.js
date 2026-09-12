@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { requestedGuestCapabilities, resolveAttachEntry, resolveAttachMode, toPublicService, toPublicIntegration, hostMeetsOpenChamberEngine, openChamberEngineMinimum } from '@openchamber/sdk';
+import { hasGuestPage, requestedGuestCapabilities, resolveAttachEntry, resolveAttachMode, toPublicService, toPublicIntegration, hostMeetsOpenChamberEngine, openChamberEngineMinimum } from '@openchamber/sdk';
 import { parseManifestJson } from '@openchamber/sdk/schemas';
 
 import { listRelativeGuestScriptHrefs, resolveGuestHtmlRelativePath } from './html-tokens.js';
@@ -58,14 +58,27 @@ export const guestAssetContentType = (filePath) => {
   return MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? null;
 };
 
-/** A `.js` URL can be served from a sibling `.ts` that the host compiles. */
-export const resolveGuestServedFile = async (packageRoot, relativePath) => {
+/** What an iframe loads: the document and its scripts. A page-less guest has neither. */
+const isGuestFrameContentType = (contentType) => (
+  contentType.startsWith('text/html') || contentType.startsWith('text/javascript')
+);
+
+/**
+ * A `.js` URL can be served from a sibling `.ts` that the host compiles.
+ * `hasPage` is whether the guest declared `panel.entry`; without one only
+ * assets (its SVG icons) are served, never HTML or JS, so nothing of a
+ * page-less package can end up mounted in a frame.
+ */
+export const resolveGuestServedFile = async (packageRoot, relativePath, { hasPage = true } = {}) => {
   const filePath = await resolveGuestAssetPath(packageRoot, relativePath);
   const contentType = filePath ? guestAssetContentType(filePath) : null;
+  if (contentType && !hasPage && isGuestFrameContentType(contentType)) {
+    return null;
+  }
   if (filePath && contentType) {
     return { filePath, contentType };
   }
-  if (!relativePath.endsWith('.js')) {
+  if (!hasPage || !relativePath.endsWith('.js')) {
     return null;
   }
   const tsPath = await resolveGuestAssetPath(packageRoot, `${relativePath.slice(0, -3)}.ts`);
@@ -144,9 +157,13 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
     }
   }
   const panel = parsed.manifest.contributes.panel;
-  const entryPath = await resolveGuestAssetPath(packageRoot, panel.entry);
-  if (!entryPath) {
-    return { ok: false, code: 'invalid-manifest' };
+  // A page-less package (tools only) has no HTML to check; parse already
+  // refused every contribution that would need a frame.
+  if (hasGuestPage(parsed.manifest.contributes)) {
+    const entryPath = await resolveGuestAssetPath(packageRoot, panel.entry);
+    if (!entryPath) {
+      return { ok: false, code: 'invalid-manifest' };
+    }
   }
   if (panel.icon.toLowerCase().endsWith('.svg')) {
     const iconPath = await resolveGuestAssetPath(packageRoot, panel.icon);
@@ -154,16 +171,18 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
       return { ok: false, code: 'invalid-manifest' };
     }
   }
-  if (!await guestBuiltScriptsReady(packageRoot, panel.entry)) {
+  if (panel.entry && !await guestBuiltScriptsReady(packageRoot, panel.entry)) {
     return { ok: false, code: 'missing-build' };
   }
   const guest = {
     id: panel.id,
     name: panel.name,
     icon: panel.icon,
-    entry: panel.entry,
     packageRoot,
   };
+  if (panel.entry) {
+    guest.entry = panel.entry;
+  }
   if (parsed.version) {
     guest.version = parsed.version;
   }
@@ -201,6 +220,9 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
   if (parsed.manifest.contributes.commands?.length) {
     guest.commands = parsed.manifest.contributes.commands.map((command) => ({ ...command }));
   }
+  if (parsed.manifest.contributes.tools?.length) {
+    guest.tools = parsed.manifest.contributes.tools.map((tool) => ({ ...tool }));
+  }
   if (parsed.manifest.contributes.service) {
     const serviceEntry = await resolveGuestAssetPath(packageRoot, parsed.manifest.contributes.service.entry);
     if (!serviceEntry) {
@@ -222,17 +244,19 @@ const withSource = (guest, source, displayPath) => ({
   path: displayPath,
 });
 
-/** Catalog JSON. Drops packageRoot. Keeps attach only when true. */
+/** Catalog JSON. Drops packageRoot. Keeps attach only when true. `entry` is absent for a page-less guest. */
 export const toPublicGuest = (guest) => {
   const row = {
     id: guest.id,
     name: guest.name,
     icon: guest.icon,
-    entry: guest.entry,
     source: guest.source,
     path: guest.path ?? null,
     enabled: guest.enabled !== false,
   };
+  if (guest.entry) {
+    row.entry = guest.entry;
+  }
   if (typeof guest.version === 'string' && guest.version) {
     row.version = guest.version;
   }
@@ -259,13 +283,16 @@ export const toPublicGuest = (guest) => {
   if (Array.isArray(guest.filesystem) && guest.filesystem.length > 0) {
     row.filesystem = [...guest.filesystem];
   }
-  // Actions and commands are the parsed manifest entries as they are: the
-  // UI decides which ones to show from the grant and the enabled flag.
+  // Actions, commands, and tools are the parsed manifest entries as they
+  // are: the UI decides which ones to apply from the grant and the enabled flag.
   if (Array.isArray(guest.actions) && guest.actions.length > 0) {
     row.actions = guest.actions.map((action) => ({ ...action }));
   }
   if (Array.isArray(guest.commands) && guest.commands.length > 0) {
     row.commands = guest.commands.map((command) => ({ ...command }));
+  }
+  if (Array.isArray(guest.tools) && guest.tools.length > 0) {
+    row.tools = guest.tools.map((tool) => ({ ...tool }));
   }
   const granted = Array.isArray(guest.capabilityGrants) ? guest.capabilityGrants : [];
   row.capabilities = {

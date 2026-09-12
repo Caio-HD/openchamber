@@ -1504,6 +1504,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolPart.error': 'Błąd:',
   'chat.toolPart.lspErrors': 'Błędy LSP',
   'chat.toolPart.moreErrors': '+{count} kolejnych błędów',
+  'chat.toolPart.moreRows': '+{count} kolejnych wierszy',
   'chat.toolPart.noOutputProduced': 'Brak wygenerowanego wyniku',
   'chat.toolPart.openSubtask': 'Otwórz podzadanie typu {type}',
   'chat.toolPart.output': 'Wyjście',

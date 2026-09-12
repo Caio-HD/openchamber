@@ -2399,6 +2399,7 @@ export const dict = {
   'chat.toolOutputDialog.noOutputProduced': 'Çıktı üretilmedi',
   'chat.toolPart.lspErrors': 'LSP hataları',
   'chat.toolPart.moreErrors': '+{count} hata daha',
+  'chat.toolPart.moreRows': '+{count} satır daha',
   'chat.toolPart.error': 'Hata:',
   'chat.toolPart.awaitingResponse': 'Yanıt bekleniyor...',
   'chat.toolPart.noOutputProduced': 'Çıktı üretilmedi',

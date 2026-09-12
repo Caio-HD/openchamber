@@ -79,7 +79,7 @@ You can also add a local `.zip` or an https link to a git repository or a zip fi
 
 `engines.openchamber` is optional. Set the oldest OpenChamber version your extension works with, as `1.24.0` or `>=1.24.0`. Older builds refuse to install it instead of failing later.
 
-`contributes.panel` describes the rail entry. `id` is kebab-case and must be unique among installed extensions. `icon` is a Remixicon name (`RiWindowLine` becomes `window`) or an SVG file inside your folder, like `icon.svg`. `entry` is the HTML file inside your folder.
+`contributes.panel` describes the rail entry. `id` is kebab-case and must be unique among installed extensions. `icon` is a Remixicon name (`RiWindowLine` becomes `window`) or an SVG file inside your folder, like `icon.svg`. `entry` is the HTML file inside your folder; leave it out for an extension that only declares `tools` (see [Your tools in the chat](#your-tools-in-the-chat)).
 
 `contributes.attach` is optional. It adds your extension to the + menu next to the chat box, so the user can pick a task and attach it to a session.
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 When the user types `/task ABC-12` in the chat box, OpenChamber asks your extension to resolve it and attaches what you return as a chip, without opening anything. Return `null` for "nothing found". If your panel is closed, OpenChamber loads it in the background for the call. A name that OpenChamber or OpenCode already uses is ignored.
 
 **Badge on the rail icon.** `host.setBadge(3)` shows a number on your icon, for example open tasks; `host.setBadge(null)` clears it. Opening the panel clears it too.
+
+## Your tools in the chat
+
+When your OpenCode plugin or MCP server adds a tool, the chat shows its calls with a generic icon and a raw output. Declare how they should look instead, with no code:
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match` is the tool name as OpenCode reports it; a trailing `*` matches a prefix. `icon` is a Remixicon name or an `.svg` file in your package, like `panel.icon`. `title` and `subtitle` are templates over the call's `input`, `output`, and `metadata`. `output` picks how the body renders: `text`, `json` (a tree), `markdown`, `code` with a `language`, `table` with `columns` (rows come from the output array or `output.items`), or `auto` for the default. An exact `match` beats a wildcard, and the first installed extension wins a tie. No permission is needed: this only changes how data already in the chat is drawn.
+
+An extension that only styles tools needs no page at all: leave out `panel.entry` and it has no rail icon, just a card in Settings → Extensions. Without a page it may declare `tools` and nothing else.
 
 ## First lines in the panel
 

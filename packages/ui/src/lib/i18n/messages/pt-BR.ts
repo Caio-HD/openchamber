@@ -2429,6 +2429,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.toolOutputDialog.noOutputProduced": "Nenhuma saída produzida",
   "chat.toolPart.lspErrors": "Erros LSP",
   "chat.toolPart.moreErrors": "+{count} erros a mais",
+  "chat.toolPart.moreRows": "+{count} linhas a mais",
   "chat.toolPart.error": "Erro:",
   "chat.toolPart.awaitingResponse": "Aguardando resposta...",
   "chat.toolPart.noOutputProduced": "Nenhuma saída produzida",

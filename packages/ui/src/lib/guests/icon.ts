@@ -34,3 +34,26 @@ export const guestPackageIconSrc = (
     ? authenticatedAsset(`/api/guests/${guestId}/${icon}`)
     : undefined
 );
+
+/** What `GuestIcon` draws: a host sprite name, or a package SVG under `iconSrc` (masked in `currentColor`). */
+type GuestToolIcon = {
+  icon: IconName;
+  iconSrc?: string;
+};
+
+/**
+ * The icon a `contributes.tools` rule asks for: a package `.svg` becomes an
+ * authenticated asset URL like the panel icon, a Remixicon name the sprite
+ * carries is used as is. `null` for no icon or a name the sprite does not
+ * know, so the host's own tool icon stays.
+ */
+export const resolveGuestToolIcon = (
+  guestId: string,
+  icon: string | undefined,
+  authenticatedAsset: (path: string) => string,
+): GuestToolIcon | null => {
+  if (icon === undefined) return null;
+  const iconSrc = guestPackageIconSrc(guestId, icon, authenticatedAsset);
+  if (iconSrc) return { icon: FALLBACK_GUEST_ICON, iconSrc };
+  return isGuestIconName(icon) ? { icon } : null;
+};

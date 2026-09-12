@@ -79,7 +79,7 @@ Du kannst auch eine lokale `.zip`-Datei oder einen https-Link zu einem Git-Repos
 
 `engines.openchamber` ist optional. Trag die älteste OpenChamber-Version ein, mit der deine Erweiterung funktioniert, als `1.24.0` oder `>=1.24.0`. Ältere Builds verweigern dann die Installation, statt später zu scheitern.
 
-`contributes.panel` beschreibt den Eintrag in der Leiste. `id` ist kebab-case und muss unter den installierten Erweiterungen eindeutig sein. `icon` ist ein Remixicon-Name (aus `RiWindowLine` wird `window`) oder eine SVG-Datei in deinem Ordner, etwa `icon.svg`. `entry` ist die HTML-Datei in deinem Ordner.
+`contributes.panel` beschreibt den Eintrag in der Leiste. `id` ist kebab-case und muss unter den installierten Erweiterungen eindeutig sein. `icon` ist ein Remixicon-Name (aus `RiWindowLine` wird `window`) oder eine SVG-Datei in deinem Ordner, etwa `icon.svg`. `entry` ist die HTML-Datei in deinem Ordner; lass es weg, wenn deine Erweiterung nur `tools` deklariert (siehe [Deine Tools im Chat](#deine-tools-im-chat)).
 
 `contributes.attach` ist optional. Es nimmt deine Erweiterung ins +-Menü neben dem Chatfeld auf, damit der Nutzer eine Aufgabe auswählen und an eine Session anhängen kann.
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 Wenn der Nutzer `/task ABC-12` ins Chatfeld tippt, bittet OpenChamber deine Erweiterung, das aufzulösen, und hängt das Ergebnis als Chip an, ohne etwas zu öffnen. Gib `null` zurück für "nichts gefunden". Ist dein Panel geschlossen, lädt OpenChamber es für den Aufruf im Hintergrund. Ein Name, den OpenChamber oder OpenCode schon verwendet, wird ignoriert.
 
 **Badge auf dem Symbol in der Leiste.** `host.setBadge(3)` zeigt eine Zahl auf deinem Symbol, zum Beispiel offene Aufgaben; `host.setBadge(null)` entfernt sie. Das Öffnen des Panels entfernt sie ebenfalls.
+
+## Deine Tools im Chat
+
+Wenn dein OpenCode-Plugin oder MCP-Server ein Tool hinzufügt, zeigt der Chat dessen Aufrufe mit einem generischen Symbol und roher Ausgabe. Beschreibe stattdessen, wie sie aussehen sollen, ganz ohne Code:
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match` ist der Tool-Name, wie OpenCode ihn meldet; ein `*` am Ende passt auf ein Präfix. `icon` ist ein Remixicon-Name oder eine `.svg`-Datei in deinem Paket, wie bei `panel.icon`. `title` und `subtitle` sind Vorlagen über `input`, `output` und `metadata` des Aufrufs. `output` bestimmt, wie der Inhalt dargestellt wird: `text`, `json` (als Baum), `markdown`, `code` mit einer `language`, `table` mit `columns` (die Zeilen kommen aus dem Ausgabe-Array oder aus `output.items`) oder `auto` für die Standarddarstellung. Ein exaktes `match` schlägt einen Platzhalter, und bei Gleichstand gewinnt die zuerst installierte Erweiterung. Eine Berechtigung ist nicht nötig: das ändert nur, wie Daten gezeichnet werden, die ohnehin schon im Chat sind.
+
+Eine Erweiterung, die nur Tools gestaltet, braucht gar keine Seite: lass `panel.entry` weg, dann hat sie kein Icon in der Leiste, nur eine Karte unter Einstellungen → Erweiterungen. Ohne Seite darf sie `tools` und sonst nichts deklarieren.
 
 ## Die ersten Zeilen im Panel
 

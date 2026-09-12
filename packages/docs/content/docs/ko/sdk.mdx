@@ -79,7 +79,7 @@ OpenChamber가 매니페스트를 읽고, 확장이 요구하는 항목을 나�
 
 `engines.openchamber`는 선택 사항입니다. 확장이 동작하는 가장 오래된 OpenChamber 버전을 `1.24.0` 또는 `>=1.24.0` 형태로 지정하세요. 더 오래된 빌드는 나중에 실패하는 대신 설치 자체를 거부합니다.
 
-`contributes.panel`은 레일 항목을 설명합니다. `id`는 kebab-case이며 설치된 확장 중에서 고유해야 합니다. `icon`은 Remixicon 이름(`RiWindowLine`이면 `window`)이거나 폴더 안의 SVG 파일(예: `icon.svg`)입니다. `entry`는 폴더 안의 HTML 파일입니다.
+`contributes.panel`은 레일 항목을 설명합니다. `id`는 kebab-case이며 설치된 확장 중에서 고유해야 합니다. `icon`은 Remixicon 이름(`RiWindowLine`이면 `window`)이거나 폴더 안의 SVG 파일(예: `icon.svg`)입니다. `entry`는 폴더 안의 HTML 파일입니다. `tools`만 선언하는 확장이라면 생략하세요([채팅에 표시되는 내 도구](#채팅에-표시되는-내-도구) 참고).
 
 `contributes.attach`는 선택 사항입니다. 채팅창 옆의 + 메뉴에 확장을 추가해서, 사용자가 작업을 골라 세션에 첨부할 수 있게 합니다.
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 사용자가 채팅창에 `/task ABC-12`를 입력하면 OpenChamber는 확장에 해석을 요청하고, 돌려준 것을 아무것도 열지 않은 채 칩으로 첨부합니다. 찾은 것이 없으면 `null`을 반환하세요. 패널이 닫혀 있으면 OpenChamber가 이 호출을 위해 백그라운드에서 패널을 불러옵니다. OpenChamber나 OpenCode가 이미 쓰는 이름은 무시됩니다.
 
 **레일 아이콘의 배지.** `host.setBadge(3)`은 아이콘에 숫자(예: 열린 작업 수)를 표시하고, `host.setBadge(null)`은 지웁니다. 패널을 열어도 지워집니다.
+
+## 채팅에 표시되는 내 도구
+
+OpenCode 플러그인이나 MCP 서버가 도구를 추가하면 채팅은 그 호출을 일반 아이콘과 원본 출력으로 보여줍니다. 대신 코드 없이 어떻게 보일지 선언하세요.
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match`는 OpenCode가 보고하는 도구 이름이며, 끝의 `*`는 접두사와 일치합니다. `icon`은 Remixicon 이름이거나 패키지 안의 `.svg` 파일이며, `panel.icon`과 같습니다. `title`과 `subtitle`은 호출의 `input`, `output`, `metadata`를 쓰는 템플릿입니다. `output`은 본문을 그리는 방식을 고릅니다. `text`, `json`(트리), `markdown`, `language`가 있는 `code`, `columns`가 있는 `table`(행은 출력 배열이나 `output.items`에서 가져옵니다), 또는 기본값인 `auto`입니다. 정확한 `match`가 와일드카드보다 우선하고, 동점이면 먼저 설치된 확장이 이깁니다. 권한은 필요 없습니다. 이미 채팅에 있는 데이터를 그리는 방식만 바꾸기 때문입니다.
+
+도구 모양만 꾸미는 확장에는 페이지가 전혀 필요 없습니다. `panel.entry`를 생략하면 레일에 아이콘이 없고, 설정 → 확장 에 카드만 표시됩니다. 페이지가 없으면 `tools`만 선언하고 다른 것은 선언하지 않아도 됩니다.
 
 ## 패널의 첫 줄
 

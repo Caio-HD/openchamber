@@ -2463,6 +2463,7 @@ export const dict = {
   'chat.toolOutputDialog.noOutputProduced': 'No output was produced',
   'chat.toolPart.lspErrors': 'LSP errors',
   'chat.toolPart.moreErrors': '+{count} more errors',
+  'chat.toolPart.moreRows': '+{count} more rows',
   'chat.toolPart.error': 'Error:',
   'chat.toolPart.awaitingResponse': 'Awaiting response...',
   'chat.toolPart.noOutputProduced': 'No output produced',

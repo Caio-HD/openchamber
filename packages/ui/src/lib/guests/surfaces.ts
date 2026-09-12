@@ -1,3 +1,5 @@
+import { hasGuestPage } from '@openchamber/sdk';
+
 import type { ContextSurfaceDescriptor } from '@/lib/surfaces/registry';
 import { pluginModeFromId } from '@/lib/surfaces/modes';
 
@@ -6,12 +8,16 @@ import { isGuestActive } from './capabilities.ts';
 import { guestPackageIconSrc, resolveGuestIconName } from './icon.ts';
 import type { InstalledGuest } from './types.ts';
 
-/** Rail surfaces for the enabled guests, in catalog order. The rail and the digit shortcuts must agree on this list. */
+/**
+ * Rail surfaces for the enabled guests with a page, in catalog order. The
+ * rail and the digit shortcuts must agree on this list. A page-less guest
+ * (tools only) has nothing to mount, so it gets no surface.
+ */
 export const enabledGuestSurfaces = (
   guests: readonly InstalledGuest[],
   authenticatedAsset: (path: string) => string,
 ): ContextSurfaceDescriptor[] => guests
-  .filter(isGuestActive)
+  .filter((guest) => isGuestActive(guest) && hasGuestPage({ panel: guest }))
   .map((guest) => guestSurfaceFromInstalled(guest, authenticatedAsset));
 
 const guestSurfaceFromInstalled = (

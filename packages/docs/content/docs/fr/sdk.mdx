@@ -79,7 +79,7 @@ Vous pouvez aussi ajouter un `.zip` local ou un lien https vers un dépôt git o
 
 `engines.openchamber` est optionnel. Indiquez la version d'OpenChamber la plus ancienne avec laquelle votre extension fonctionne, sous la forme `1.24.0` ou `>=1.24.0`. Les versions plus anciennes refusent de l'installer au lieu d'échouer plus tard.
 
-`contributes.panel` décrit l'entrée dans la barre latérale. `id` est en kebab-case et doit être unique parmi les extensions installées. `icon` est un nom Remixicon (`RiWindowLine` devient `window`) ou un fichier SVG dans votre dossier, comme `icon.svg`. `entry` est le fichier HTML dans votre dossier.
+`contributes.panel` décrit l'entrée dans la barre latérale. `id` est en kebab-case et doit être unique parmi les extensions installées. `icon` est un nom Remixicon (`RiWindowLine` devient `window`) ou un fichier SVG dans votre dossier, comme `icon.svg`. `entry` est le fichier HTML dans votre dossier ; omettez-le pour une extension qui ne déclare que `tools` (voir [Vos outils dans le chat](#vos-outils-dans-le-chat)).
 
 `contributes.attach` est optionnel. Il ajoute votre extension au menu + à côté de la zone de chat, pour que l'utilisateur puisse choisir une tâche et l'attacher à une session.
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 Quand l'utilisateur tape `/task ABC-12` dans la zone de chat, OpenChamber demande à votre extension de le résoudre et attache ce que vous renvoyez sous forme de puce, sans rien ouvrir. Renvoyez `null` pour "rien trouvé". Si votre panneau est fermé, OpenChamber le charge en arrière-plan pour cet appel. Un nom déjà utilisé par OpenChamber ou OpenCode est ignoré.
 
 **Badge sur l'icône de la barre latérale.** `host.setBadge(3)` affiche un nombre sur votre icône, par exemple les tâches ouvertes ; `host.setBadge(null)` l'efface. Ouvrir le panneau l'efface aussi.
+
+## Vos outils dans le chat
+
+Quand votre plugin OpenCode ou serveur MCP ajoute un outil, le chat affiche ses appels avec une icône générique et une sortie brute. Déclarez plutôt à quoi ils doivent ressembler, sans code :
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match` est le nom de l'outil tel qu'OpenCode le rapporte ; un `*` final correspond à un préfixe. `icon` est un nom Remixicon ou un fichier `.svg` dans votre paquet, comme `panel.icon`. `title` et `subtitle` sont des gabarits sur `input`, `output` et `metadata` de l'appel. `output` choisit comment le corps est rendu : `text`, `json` (un arbre), `markdown`, `code` avec un `language`, `table` avec `columns` (les lignes viennent du tableau de sortie ou de `output.items`) ou `auto` pour le rendu par défaut. Un `match` exact l'emporte sur un joker, et en cas d'égalité la première extension installée gagne. Aucune permission n'est nécessaire : cela ne change que la façon dont des données déjà dans le chat sont dessinées.
+
+Une extension qui ne fait que styliser des outils n'a besoin d'aucune page : omettez `panel.entry` et elle n'aura pas d'icône dans la barre latérale, juste une carte dans Paramètres → Extensions. Sans page, elle peut déclarer `tools` et rien d'autre.
 
 ## Premières lignes dans le panneau
 

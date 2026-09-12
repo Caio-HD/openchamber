@@ -204,7 +204,8 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
   // Minted per mount (and per remount via frameKey): the token in this URL is
   // scoped to the guest's files and short-lived, so it is never reused.
   // The attach dialog may load its own page; the rail always loads panel.entry.
-  const guestEntry = guest ? (surface === 'dialog' && guest.attachEntry ? guest.attachEntry : guest.entry) : null;
+  // A page-less guest has no entry and never gets a frame.
+  const guestEntry = guest ? (surface === 'dialog' && guest.attachEntry ? guest.attachEntry : guest.entry ?? null) : null;
   const [src, setSrc] = React.useState('');
   React.useEffect(() => {
     if (!guestEntry) {

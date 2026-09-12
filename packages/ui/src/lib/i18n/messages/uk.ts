@@ -2429,6 +2429,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.toolOutputDialog.noOutputProduced": "Вивід відсутній",
   "chat.toolPart.lspErrors": "LSP помилки",
   "chat.toolPart.moreErrors": "+ ще помилок: {count}",
+  "chat.toolPart.moreRows": "+ ще рядків: {count}",
   "chat.toolPart.error": "Помилка:",
   "chat.toolPart.awaitingResponse": "Очікування відповіді...",
   "chat.toolPart.noOutputProduced": "Вивід відсутній",

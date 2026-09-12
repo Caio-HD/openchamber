@@ -5,6 +5,7 @@ import {
   guestPackageIconSrc,
   isGuestPackageSvgIcon,
   resolveGuestIconName,
+  resolveGuestToolIcon,
 } from './icon.ts';
 
 describe('resolveGuestIconName', () => {
@@ -27,6 +28,25 @@ describe('resolveGuestIconName', () => {
   test('falls back for a package SVG path (rail uses iconSrc)', () => {
     expect(isGuestPackageSvgIcon('icon.svg')).toBe(true);
     expect(resolveGuestIconName('icon.svg')).toBe(FALLBACK_GUEST_ICON);
+  });
+});
+
+describe('resolveGuestToolIcon', () => {
+  const asset = (path: string) => `https://x${path}?t=1`;
+
+  test('keeps a Remixicon name the sprite carries', () => {
+    expect(resolveGuestToolIcon('tasks', 'checkbox-circle', asset)).toEqual({ icon: 'checkbox-circle' });
+  });
+
+  test('turns a package SVG path into an authenticated asset url', () => {
+    expect(resolveGuestToolIcon('tasks', 'icons/tool.svg', asset))
+      .toEqual({ icon: FALLBACK_GUEST_ICON, iconSrc: 'https://x/api/guests/tasks/icons/tool.svg?t=1' });
+  });
+
+  test('is null without an icon or for a name the sprite does not know', () => {
+    expect(resolveGuestToolIcon('tasks', undefined, asset)).toBeNull();
+    expect(resolveGuestToolIcon('tasks', 'not-an-icon', asset)).toBeNull();
+    expect(resolveGuestToolIcon('tasks', 'linear', asset)).toBeNull();
   });
 });
 

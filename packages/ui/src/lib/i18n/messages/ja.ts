@@ -2462,6 +2462,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolOutputDialog.noOutputProduced': '出力は生成されませんでした',
   'chat.toolPart.lspErrors': 'LSPエラー',
   'chat.toolPart.moreErrors': '+{count}件のエラー',
+  'chat.toolPart.moreRows': '+{count}行',
   'chat.toolPart.error': 'エラー:',
   'chat.toolPart.awaitingResponse': '応答を待機中...',
   'chat.toolPart.noOutputProduced': '出力は生成されませんでした',

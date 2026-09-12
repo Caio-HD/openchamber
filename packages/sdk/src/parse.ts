@@ -11,7 +11,17 @@ import {
   GUEST_COMMAND_NAME,
   GUEST_FILESYSTEM_PATTERNS_MAX,
   GUEST_FILESYSTEM_PATTERN_MAX,
+  GUEST_TOOLS_MAX,
+  GUEST_TOOL_COLUMNS_MAX,
+  GUEST_TOOL_COLUMN_MAX,
+  GUEST_TOOL_LANGUAGE_MAX,
+  GUEST_TOOL_MATCH,
+  GUEST_TOOL_MATCH_MAX,
+  GUEST_TOOL_NAME_MAX,
+  GUEST_TOOL_OUTPUTS,
+  GUEST_TOOL_TEMPLATE_MAX,
   PANEL_ID,
+  hasGuestPage,
   isGuestFilesystemPattern,
   isGuestPackageSvgIcon,
   isSafeAssetPath,
@@ -77,7 +87,7 @@ const panelSchema = z.object({
   id: z.string().trim().regex(PANEL_ID),
   name: z.string().trim().min(1),
   icon: z.string().trim().refine(isPanelIcon),
-  entry: z.string().trim().refine(isSafeAssetPath),
+  entry: z.string().trim().refine(isSafeAssetPath).optional(),
 });
 
 const integrationSettingSchema = z.object({
@@ -216,22 +226,69 @@ const commandSchema = z.object({
 const commandsSchema = z.array(commandSchema).min(1).max(GUEST_COMMANDS_MAX)
   .refine((commands) => uniqueBy(commands, (command) => command.name), { message: 'command names must be unique' });
 
+// `language` only means something for `code` and `columns` only for `table`;
+// a table without columns has nothing to draw. Each is a misconfiguration
+// that fails closed instead of carrying a dead field.
+const toolSchema = z.object({
+  match: z.string().trim().min(1).max(GUEST_TOOL_MATCH_MAX).regex(GUEST_TOOL_MATCH),
+  name: z.string().trim().min(1).max(GUEST_TOOL_NAME_MAX).optional(),
+  icon: z.string().trim().refine(isPanelIcon).optional(),
+  title: z.string().trim().min(1).max(GUEST_TOOL_TEMPLATE_MAX).optional(),
+  subtitle: z.string().trim().min(1).max(GUEST_TOOL_TEMPLATE_MAX).optional(),
+  output: z.enum(GUEST_TOOL_OUTPUTS).optional(),
+  language: z.string().trim().min(1).max(GUEST_TOOL_LANGUAGE_MAX).optional(),
+  columns: z.array(z.string().trim().min(1).max(GUEST_TOOL_COLUMN_MAX)).min(1).max(GUEST_TOOL_COLUMNS_MAX).optional(),
+}).refine((value) => value.output === 'code' || value.language === undefined, { path: ['language'] })
+  .refine((value) => (value.output === 'table') === (value.columns !== undefined), { path: ['columns'] });
+
+const toolsSchema = z.array(toolSchema).min(1).max(GUEST_TOOLS_MAX);
+
+const contributesSchema = z.object({
+  panel: panelSchema,
+  attach: attachSchema.optional(),
+  capabilities: z.array(z.enum(DECLARED_GUEST_CAPABILITIES)).max(8).optional(),
+  integration: integrationSchema.optional(),
+  service: serviceSchema.optional(),
+  filesystem: z.array(
+    z.string().max(GUEST_FILESYSTEM_PATTERN_MAX).refine(isGuestFilesystemPattern),
+  ).min(1).max(GUEST_FILESYSTEM_PATTERNS_MAX).optional(),
+  actions: actionsSchema.optional(),
+  commands: commandsSchema.optional(),
+  tools: toolsSchema.optional(),
+});
+
+/**
+ * Everything that only makes sense with an iframe to mount. Without
+ * `panel.entry` there is nothing to open from the rail, the + menu, a menu
+ * action, or a slash command, and nothing to hand a capability, a service,
+ * an integration, or a filesystem grant to; only `tools` stays meaningful.
+ */
+const pageOnlyContributions = (contributes: z.output<typeof contributesSchema>): string[] => {
+  const declared: string[] = [];
+  if (contributes.attach !== undefined && contributes.attach !== false) declared.push('attach');
+  if (contributes.capabilities && contributes.capabilities.length > 0) declared.push('capabilities');
+  if (contributes.integration !== undefined) declared.push('integration');
+  if (contributes.service !== undefined) declared.push('service');
+  if (contributes.filesystem !== undefined) declared.push('filesystem');
+  if (contributes.actions !== undefined) declared.push('actions');
+  if (contributes.commands !== undefined) declared.push('commands');
+  return declared;
+};
+
 export const openChamberManifestSchema = z.object({
   apiVersion: z.literal(OPENCHAMBER_SDK_MANIFEST_API_VERSIONS[0]),
   engines: z.object({
     openchamber: z.string().trim().regex(OPENCHAMBER_ENGINE_PATTERN),
   }).strict().optional(),
-  contributes: z.object({
-    panel: panelSchema,
-    attach: attachSchema.optional(),
-    capabilities: z.array(z.enum(DECLARED_GUEST_CAPABILITIES)).max(8).optional(),
-    integration: integrationSchema.optional(),
-    service: serviceSchema.optional(),
-    filesystem: z.array(
-      z.string().max(GUEST_FILESYSTEM_PATTERN_MAX).refine(isGuestFilesystemPattern),
-    ).min(1).max(GUEST_FILESYSTEM_PATTERNS_MAX).optional(),
-    actions: actionsSchema.optional(),
-    commands: commandsSchema.optional(),
+  contributes: contributesSchema.superRefine((contributes, ctx) => {
+    if (hasGuestPage(contributes)) return;
+    const needsPage = pageOnlyContributions(contributes);
+    if (needsPage.length === 0) return;
+    ctx.addIssue({
+      code: 'custom',
+      path: ['panel'],
+      message: `${needsPage.map((key) => `contributes.${key}`).join(', ')} needs panel.entry; an extension without a page may only declare tools.`,
+    });
   }),
 });
 
@@ -257,7 +314,7 @@ const fail = (code: ParseManifestErrorCode, message: string): ParseManifestFailu
   message,
 });
 
-const failureFromIssue = (issue: { path: ReadonlyArray<PropertyKey>; code: string }): ParseManifestFailure => {
+const failureFromIssue = (issue: { path: ReadonlyArray<PropertyKey>; code: string; message: string }): ParseManifestFailure => {
   // Paths are reported relative to the `openchamber` block whether the
   // document was a bare manifest or a package.json envelope.
   const segments = issue.path.map(String);
@@ -279,6 +336,9 @@ const failureFromIssue = (issue: { path: ReadonlyArray<PropertyKey>; code: strin
   }
   if (path === 'engines' || path.startsWith('engines.')) {
     return fail('invalid-engines', 'engines.openchamber must be a version like 1.22.0 or >=1.22.0.');
+  }
+  if (path === 'contributes.panel' && issue.code === 'custom') {
+    return fail('invalid-panel', issue.message);
   }
   if (path === 'contributes' || path === 'contributes.panel') {
     return fail('missing-panel', 'contributes.panel is required.');
@@ -322,6 +382,12 @@ const failureFromIssue = (issue: { path: ReadonlyArray<PropertyKey>; code: strin
     return fail(
       'invalid-commands',
       'contributes.commands lists up to 8 entries with a unique name matching /^[a-z][a-z0-9-]{0,23}$/ and an optional description of 1 to 80 characters.',
+    );
+  }
+  if (path.startsWith('contributes.tools')) {
+    return fail(
+      'invalid-tools',
+      'contributes.tools lists up to 16 entries with a match of 1 to 128 characters ([A-Za-z0-9_.:-], "*" only at the end), optional name (1 to 40), icon (Remixicon name or package .svg path), title and subtitle templates (1 to 200), output "auto" | "text" | "json" | "markdown" | "code" | "table", language (code only), and columns (table only, 1 to 16).',
     );
   }
   if (path.startsWith('contributes.integration')) {

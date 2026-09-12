@@ -25,8 +25,8 @@ Two entrypoints:
 | Must exist                                                                       | When                                            | Failure code       |
 | -------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------ |
 | Semver `version` on `package.json` (`1.0.0`)                                     | Always on install                               | `invalid-manifest` |
-| `panel.entry` HTML file                                                          | Always                                          | `invalid-manifest` |
-| Every relative `<script src="…">` `.js` from that HTML (usually `panel/main.js`) | Always                                          | `missing-build`    |
+| `panel.entry` HTML file                                                          | When `panel.entry` is set (a tools-only package may omit it) | `invalid-manifest` |
+| Every relative `<script src="…">` `.js` from that HTML (usually `panel/main.js`) | When `panel.entry` is set                       | `missing-build`    |
 | File named by `panel.icon`                                                       | Only when icon ends in `.svg` (e.g. `icon.svg`) | `invalid-manifest` |
 | File named by `service.entry` (e.g. `service/main.js`)                               | When `contributes.service` is set                 | `missing-build`    |
 
@@ -317,6 +317,7 @@ Used by the OpenChamber host and by tools that validate packages. Guests rarely 
         { "id": "summarize", "label": "Summarize session", "where": "session", "payload": ["messages"] }
       ],
       "commands": [{ "name": "task", "description": "Attach a task by id" }],
+      "tools": [{ "match": "mcp.tasks.*", "name": "Tasks", "icon": "checkbox-circle", "title": "{input.id}", "output": "table", "columns": ["id", "title", "status"] }],
       "integration": { /* oauth | token | host */ },
       "service": { /* optional local process */ }
     }
@@ -332,11 +333,12 @@ Used by the OpenChamber host and by tools that validate packages. Guests rarely 
 | `engines.openchamber` | Optional. Only `1.22.0` or `>=1.22.0`. Older host → `host-too-old`                                                                                                                   |
 | `panel.id`            | kebab-case                                                                                                                                                                           |
 | `panel.icon`          | Remixicon kebab name (`window`) **or** package `.svg` path. Remixicon needs no file. An `.svg` path must exist on disk or install fails (`invalid-manifest`). No URLs/absolute paths |
-| `panel.entry`         | Path inside package. No `..`, absolute, or URL. HTML must exist; its relative `.js` scripts must exist (`missing-build` if not)                                                      |
+| `panel.entry`         | Optional. Path inside package. No `..`, absolute, or URL. HTML must exist; its relative `.js` scripts must exist (`missing-build` if not). Omit it for a page-less extension: then only `tools` (plus `engines` and `version`) may be declared; `attach`, `actions`, `commands`, `service`, `integration`, `capabilities`, or `filesystem` without an entry fail parse as `invalid-panel`. A page-less extension has no rail icon, + menu row, or frame; the Extensions card says "No panel". `hasGuestPage(contributes)` tells the two apart |
 | `attach`              | `true` / `"panel"` → + menu opens rail; `"dialog"` → host window; omit/`false` → off menus. Object form `{ "mode": "panel" \| "dialog", "entry"?: "panel/attach.html" }`: `entry` (dialog only, same path rules as `panel.entry`, must exist with built scripts) is the page the dialog loads instead of `panel.entry` |
 | `capabilities`        | Optional list of `prompt`, `sessions`, `files`. `files` is read **and** write inside the open project. Approved once at install                                                     |
 | `actions`             | Optional, 1–8 entries, unique kebab-case `id`, `label` 1–40 chars, optional `icon` (same rules as `panel.icon`, falls back to it), `where: "message" \| "session"`. Message actions may narrow `roles` to `["user"]` / `["assistant"]` (default both); session actions may ask for `payload: ["messages"]`, which adds the `conversation` capability. Bad shape is `invalid-actions`. The entry shows in that message's or session's menu and opens the guest with the item as `ready.item` (the attach window for `attach: "dialog"`, otherwise the rail) |
 | `commands`            | Optional, 1–8 entries, unique `name` matching `/^[a-z][a-z0-9-]{0,23}$/`, optional `description` 1–80 chars (`invalid-commands`). `/name args` in the chat box calls `onResolve` instead of the model and attaches what it returns. A name the composer already has (built-in, OpenCode command, skill) is ignored with a console warning |
+| `tools`               | Optional, 1–16 entries that say how the extension's tool calls look in the chat. `match` is the full tool name OpenCode reports (`mcp.jira.search`, `jira_search`), 1–128 chars of `[A-Za-z0-9_.:-]`, with `*` allowed once at the end as a suffix wildcard (`mcp.jira.*`). Optional `name` (1–40, the header title when `title` is absent or renders empty), `icon` (Remixicon name or package `.svg` path, same rules as `panel.icon`; the SVG is drawn in the text colour at the glyph size), `title` / `subtitle` templates (1–200, `{input.path}` / `{output.path}` / `{metadata.path}` placeholders, a missing path renders empty, values are cut at 200), `output` `"auto"` (default) \| `"text"` \| `"json"` \| `"markdown"` \| `"code"` \| `"table"`, `language` (code only), `columns` (table only, 1–16 dotted paths; rows are the output array or `output.items`). Bad shape is `invalid-tools`. An exact `match` beats a wildcard from any extension; among equals the first extension wins. Only an enabled, fully approved extension's rules apply |
 | `filesystem`          | Optional, 1–16 globs, each 1–256 chars, starting with `/` or `~/`; `**` spans folders, `*` / `?` stay in one segment; no `..`, empty segment, or backslash (`invalid-filesystem`). Declaring it adds the `filesystem` capability and the dialog lists the globs |
 | `integration`         | Optional. Exactly one of `oauth`, `token`, or `host` (`provider: "linear"` only)                                                                                                     |
 | `service`               | Optional. `entry` must be a built `.js` file on disk. See [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/GUEST_SERVICES.md)                        |
@@ -353,6 +355,7 @@ Extra keys are dropped, not forwarded.
 | `parseManifestJson(json)` (`@openchamber/sdk/schemas`) | String → same result                                      |
 | `resolveAttachMode(attach)`                        | Normalize to `'panel'                                     |
 | `resolveAttachEntry(contributes)`                  | Dialog page from the object form, or `null` when the dialog reuses `panel.entry` |
+| `hasGuestPage(contributes)`                        | `true` when `panel.entry` is set; a page-less package may only declare `tools` |
 | `resolveIntegrationAuth` / `resolveIntegrationApi` | Auth kind and API origin                                  |
 | `toPublicIntegration` / `toPublicService`            | Catalog-safe public slices                                |
 | `isGuestPackageSvgIcon`                            | Whether icon is a package SVG path                        |
@@ -377,7 +380,7 @@ Extra keys are dropped, not forwarded.
 | `isHostRequestErrorCode` / `resolveHostRequestErrorCode`                                                          | Error code validation              |
 
 
-Constants: `OPENCHAMBER_SDK_CHANNEL`, `OPENCHAMBER_SDK_API_VERSION`, `HOST_LINEAR_API_ORIGIN`, `GUEST_*_MAX`, `GUEST_REQUEST_TIMEOUT_MS`, `GUEST_ACTIONS_MAX`, `GUEST_COMMANDS_MAX`, `GUEST_COMMAND_NAME`, `HOST_REQUEST_ERROR_CODES`, `SERVICE_STATUS_VALUES`, `SESSION_LIFECYCLE_PHASES`, `START_SESSION_SENT`.
+Constants: `OPENCHAMBER_SDK_CHANNEL`, `OPENCHAMBER_SDK_API_VERSION`, `HOST_LINEAR_API_ORIGIN`, `GUEST_*_MAX`, `GUEST_REQUEST_TIMEOUT_MS`, `GUEST_ACTIONS_MAX`, `GUEST_COMMANDS_MAX`, `GUEST_COMMAND_NAME`, `GUEST_TOOLS_MAX`, `GUEST_TOOL_MATCH`, `GUEST_TOOL_OUTPUTS`, `HOST_REQUEST_ERROR_CODES`, `SERVICE_STATUS_VALUES`, `SESSION_LIFECYCLE_PHASES`, `START_SESSION_SENT`.
 
 Wire messages added for these: host → guest `resolve` (`{ id, payload: { command, args } }`), guest → host `resolve-result` (`{ id, payload: { item } | { error } }`, no `result` comes back) and `badge` (`{ count }`).
 

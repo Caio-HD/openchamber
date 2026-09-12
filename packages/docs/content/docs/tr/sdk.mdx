@@ -79,7 +79,7 @@ Yerel bir `.zip` dosyası ya da bir git deposuna veya zip dosyasına giden https
 
 `engines.openchamber` isteğe bağlıdır. Eklentinizin çalıştığı en eski OpenChamber sürümünü `1.24.0` veya `>=1.24.0` biçiminde yazın. Daha eski sürümler sonradan hata vermek yerine kurulumu reddeder.
 
-`contributes.panel` şerit girişini tanımlar. `id` kebab-case olmalı ve kurulu eklentiler arasında benzersiz olmalıdır. `icon` bir Remixicon adı (`RiWindowLine` için `window`) ya da klasörünüzdeki bir SVG dosyasıdır, örneğin `icon.svg`. `entry` klasörünüzdeki HTML dosyasıdır.
+`contributes.panel` şerit girişini tanımlar. `id` kebab-case olmalı ve kurulu eklentiler arasında benzersiz olmalıdır. `icon` bir Remixicon adı (`RiWindowLine` için `window`) ya da klasörünüzdeki bir SVG dosyasıdır, örneğin `icon.svg`. `entry` klasörünüzdeki HTML dosyasıdır; yalnızca `tools` tanımlayan bir eklentide bunu atlayın (bkz. [Sohbetteki araçlarınız](#sohbetteki-araçlarınız)).
 
 `contributes.attach` isteğe bağlıdır. Eklentinizi sohbet kutusunun yanındaki + menüsüne ekler; kullanıcı buradan bir görev seçip oturuma iliştirebilir.
 
@@ -178,6 +178,28 @@ host.onResolve(async ({ command, args }) => {
 Kullanıcı sohbet kutusuna `/task ABC-12` yazdığında OpenChamber eklentinizden bunu çözmesini ister ve döndürdüğünüzü, hiçbir şey açmadan, etiket olarak iliştirir. "Bir şey bulunamadı" için `null` döndürün. Paneliniz kapalıysa OpenChamber bu çağrı için onu arka planda yükler. OpenChamber'ın veya OpenCode'un zaten kullandığı bir ad yok sayılır.
 
 **Şerit simgesindeki rozet.** `host.setBadge(3)` simgenizde bir sayı gösterir, örneğin açık görevler; `host.setBadge(null)` onu temizler. Paneli açmak da temizler.
+
+## Sohbetteki araçlarınız
+
+OpenCode eklentiniz veya MCP sunucunuz bir araç eklediğinde sohbet, çağrılarını genel bir simge ve ham çıktıyla gösterir. Bunun yerine, kod yazmadan nasıl görünmeleri gerektiğini bildirin:
+
+```json
+"tools": [
+  {
+    "match": "mcp.jira.*",
+    "name": "Jira",
+    "icon": "task-line",
+    "title": "{input.key}",
+    "subtitle": "{output.status}",
+    "output": "table",
+    "columns": ["key", "summary", "status"]
+  }
+]
+```
+
+`match`, OpenCode'un bildirdiği haliyle aracın adıdır; sondaki `*` bir öneki eşleştirir. `icon`, `panel.icon` gibi bir Remixicon adı ya da paketinizdeki bir `.svg` dosyasıdır. `title` ve `subtitle`, çağrının `input`, `output` ve `metadata` değerleri üzerinde çalışan şablonlardır. `output`, gövdenin nasıl çizileceğini seçer: `text`, `json` (ağaç), `markdown`, `language` ile `code`, `columns` ile `table` (satırlar çıktı dizisinden veya `output.items` içinden gelir) ya da varsayılan için `auto`. Tam bir `match` joker karakteri yener; eşitlikte ilk yüklenen eklenti kazanır. İzin gerekmez: bu yalnızca sohbette zaten bulunan verilerin nasıl çizildiğini değiştirir.
+
+Yalnızca araçları biçimlendiren bir eklentinin sayfaya hiç ihtiyacı yoktur: `panel.entry` öğesini atlayın, şeritte simgesi olmaz, sadece Ayarlar → Uzantılar içinde bir kart görünür. Sayfası olmadan yalnızca `tools` tanımlayabilir, başka bir şey tanımlamaz.
 
 ## Paneldeki ilk satırlar
 

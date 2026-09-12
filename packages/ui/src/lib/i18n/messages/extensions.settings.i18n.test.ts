@@ -14,6 +14,7 @@ const requiredKeys = [
   'settings.extensions.source.path',
   'settings.extensions.source.zip',
   'settings.extensions.source.git',
+  'settings.extensions.source.noPanel',
   'settings.extensions.add.label',
   'settings.extensions.add.placeholder',
   'settings.extensions.add.action',
