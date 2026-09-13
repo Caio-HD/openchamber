@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { getGuestAuth, guestAuthPersistPath, patchGuestAuth } from './auth-store.js';
+import { credentialTarget } from './oauth.js';
 import { joinGuestRequestUrl, proxyGuestRequest } from './request.js';
 
 const clickupGuest = {
@@ -33,7 +34,7 @@ describe('proxyGuestRequest', () => {
   test('attaches the stored bearer and returns the capped body', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-req-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { accessToken: 'tok-1' }, persistPath);
+    await patchGuestAuth('clickup', { accessToken: 'tok-1', target: credentialTarget(clickupGuest.integration) }, persistPath);
     const originalFetch = globalThis.fetch;
     const seen = [];
     globalThis.fetch = async (url, init) => {
@@ -61,7 +62,7 @@ describe('proxyGuestRequest', () => {
   test('sends a pasted token as the Authorization header', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-req-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { accessToken: 'pk_tok' }, persistPath);
+    await patchGuestAuth('clickup', { accessToken: 'pk_tok', target: { apiOrigin: 'https://api.clickup.com' } }, persistPath);
     const originalFetch = globalThis.fetch;
     const seen = [];
     globalThis.fetch = async (url, init) => {
@@ -96,7 +97,7 @@ describe('proxyGuestRequest', () => {
   test('drops tokens when a 401 cannot refresh', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-req-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { accessToken: 'tok-old' }, persistPath);
+    await patchGuestAuth('clickup', { accessToken: 'tok-old', target: credentialTarget(clickupGuest.integration) }, persistPath);
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('nope', { status: 401 });
     try {
@@ -130,5 +131,40 @@ describe('proxyGuestRequest', () => {
       expect(error.code).toBe('DISCONNECTED');
     }
     await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('credential target', () => {
+  test('drops a token minted for another API origin instead of sending it', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-req-'));
+    const persistPath = guestAuthPersistPath(dir);
+    await patchGuestAuth('clickup', { accessToken: 'tok-1', target: { apiOrigin: 'https://api.old.example' } }, persistPath);
+    const originalFetch = globalThis.fetch;
+    let requested = 0;
+    globalThis.fetch = async () => {
+      requested += 1;
+      return new Response('{"ok":true}', { status: 200 });
+    };
+    try {
+      await expect(proxyGuestRequest({ guest: clickupGuest, persistPath, method: 'GET', path: '/api/v2/user' }))
+        .rejects.toMatchObject({ code: 'DISCONNECTED' });
+      expect(requested).toBe(0);
+      expect((await getGuestAuth('clickup', persistPath))?.accessToken).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a token without a recorded target never counts', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-req-'));
+    const persistPath = guestAuthPersistPath(dir);
+    await patchGuestAuth('clickup', { accessToken: 'tok-1' }, persistPath);
+    try {
+      await expect(proxyGuestRequest({ guest: clickupGuest, persistPath, method: 'GET', path: '/api/v2/user' }))
+        .rejects.toMatchObject({ code: 'DISCONNECTED' });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -5,9 +5,9 @@ import {
   resolveIntegrationApi,
 } from '@openchamber/sdk';
 
-import { dropGuestTokens, getGuestAuth } from './auth-store.js';
+import { dropGuestTokens } from './auth-store.js';
 import { resolveHostAccessToken } from './host-session.js';
-import { GuestOAuthError, guestAuthorizationHeader, refreshGuestAccessToken } from './oauth.js';
+import { GuestOAuthError, guestAuthorizationHeader, refreshGuestAccessToken, takeUsableGuestAuth } from './oauth.js';
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -73,7 +73,7 @@ export const proxyGuestRequest = async ({ guest, persistPath, method, path, quer
     throw new GuestOAuthError('Request path must stay on the declared apiOrigin.', 'BAD_PATH');
   }
   const hostToken = await resolveHostAccessToken(guest.integration);
-  const stored = await getGuestAuth(guest.id, persistPath);
+  const stored = hostToken ? null : await takeUsableGuestAuth(guest, persistPath);
   let accessToken = hostToken ?? stored?.accessToken;
   if (!accessToken) {
     throw new GuestOAuthError('Not connected.', 'DISCONNECTED');

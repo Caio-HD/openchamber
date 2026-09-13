@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   getServiceStatus,
   proxyGuestServiceRequest,
+  readServicePid,
   stopAllGuestServices,
   stopGuestService,
 } from './service.js';
@@ -240,6 +241,35 @@ describe('pause before the request reads the store', () => {
       await stopGuestService('docker');
       await expect(pending).rejects.toMatchObject({ code: 'NO_SERVICE' });
       expect(getServiceStatus('docker')).toBe('stopped');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('restart after the process died', () => {
+  test('the next request restarts the service instead of reading the cleanup as a pause', async () => {
+    const { dir, persistPath, packageRoot } = await writeFixture();
+    try {
+      await setCapabilityGrants('docker', persistPath, ['service']);
+      const params = {
+        guestId: 'docker',
+        packageRoot,
+        service: { entry: 'service/main.js', permissions: { exec: ['docker'] } },
+        granted: ['service'],
+        persistPath,
+        method: 'GET',
+        path: '/ping',
+      };
+      expect(await proxyGuestServiceRequest(params)).toEqual({ status: 200, body: '{"pong":true}' });
+      // Kill the process behind the host's back, the way a crash would.
+      const pid = readServicePid('docker');
+      process.kill(pid, 'SIGKILL');
+      const startedAt = Date.now();
+      while (getServiceStatus('docker') === 'ready' && Date.now() - startedAt < 5_000) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(await proxyGuestServiceRequest(params)).toEqual({ status: 200, body: '{"pong":true}' });
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

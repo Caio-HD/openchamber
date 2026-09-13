@@ -15,6 +15,14 @@ const guestAuthEntrySchema = z.object({
   account: z.string().max(200).optional(),
   settings: z.record(z.string().regex(SETTING_KEY), z.string().max(2000)).optional(),
   authorizedAt: z.number().int().positive().optional(),
+  // Where the tokens were minted for. Checked before every use, so a
+  // package that moved its API origin or OAuth endpoints cannot receive
+  // credentials the user connected for the old ones.
+  target: z.object({
+    apiOrigin: z.string().min(1),
+    authorizeUrl: z.string().min(1).optional(),
+    tokenUrl: z.string().min(1).optional(),
+  }).optional(),
 });
 
 const storeSchema = z.object({
@@ -129,6 +137,7 @@ export const dropGuestTokens = async (guestId, persistPath) => {
   return patchGuestAuth(guestId, {
     accessToken: undefined,
     refreshToken: undefined,
+    target: undefined,
     tokenType: undefined,
     expiresAt: undefined,
     account: undefined,

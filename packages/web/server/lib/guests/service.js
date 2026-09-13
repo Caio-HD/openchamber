@@ -175,8 +175,23 @@ const stopEpochs = new Map();
 
 const stopEpochOf = (guestId) => stopEpochs.get(guestId) ?? 0;
 
+/**
+ * A user-facing stop (Pause, Remove, withdrawn approval, socket change,
+ * host quit): ends the process and cancels any request or start in flight.
+ * @param {string} guestId
+ */
 export const stopGuestService = async (guestId) => {
   stopEpochs.set(guestId, stopEpochOf(guestId) + 1);
+  await discardRuntime(guestId);
+};
+
+/**
+ * Internal cleanup of a runtime that is dead or failed, before a restart.
+ * Does not bump the epoch: replacing a crashed process is not a Pause and
+ * must not cancel the request that triggered the restart.
+ * @param {string} guestId
+ */
+const discardRuntime = async (guestId) => {
   const runtime = runtimes.get(guestId);
   if (!runtime) {
     return;
@@ -199,6 +214,9 @@ export const stopGuestService = async (guestId) => {
     child.kill('SIGTERM');
   });
 };
+
+/** Test seam: the pid of a guest's running service, or `null`. */
+export const readServicePid = (guestId) => runtimes.get(guestId)?.child.pid ?? null;
 
 export const stopAllGuestServices = async () => {
   const ids = [...runtimes.keys()];
@@ -247,15 +265,17 @@ const startGuestService = async ({
   entry,
   socketBindings = [],
   socketOverrides = {},
+  epoch,
 }) => {
   const existing = runtimes.get(guestId);
   if (existing?.status === 'ready' && existing.child.exitCode === null && !existing.child.signalCode) {
     return existing;
   }
   if (existing) {
-    await stopGuestService(guestId);
+    await discardRuntime(guestId);
   }
-  const epoch = stopEpochOf(guestId);
+  // The request's epoch, read before its first store access: a Pause that
+  // finished anywhere since then is a cancellation, spawn included.
   const cancelled = () => stopEpochOf(guestId) !== epoch;
   const stoppedError = () => new GuestServiceError('The service was stopped before it became ready.', 'NO_SERVICE');
 
@@ -290,6 +310,9 @@ const startGuestService = async ({
   if (Object.keys(socketEnv).length > 0) {
     env.OPENCHAMBER_SERVICE_SOCKETS = JSON.stringify(socketEnv);
   }
+  if (cancelled()) {
+    throw stoppedError();
+  }
   const child = spawn(process.execPath, [absoluteEntry], {
     cwd: packageRoot,
     env,
@@ -321,14 +344,14 @@ const startGuestService = async ({
     // Pause landed while the process was coming up; stopGuestService found
     // this runtime (registered above) and is killing it, or already did.
     if (runtimes.get(guestId) === runtime) {
-      await stopGuestService(guestId);
+      await discardRuntime(guestId);
     }
     throw stoppedError();
   }
   if (!ready || child.exitCode !== null || child.signalCode) {
     runtime.status = 'failed';
     const detail = output.snapshot();
-    await stopGuestService(guestId);
+    await discardRuntime(guestId);
     throw new GuestServiceError(
       detail
         ? `Guest service failed to become ready. ${detail}`
@@ -457,11 +480,12 @@ export const proxyGuestServiceRequest = async ({
       entry: service.entry,
       socketBindings,
       socketOverrides,
+      epoch,
     });
   }
   if (stopEpochOf(guestId) !== epoch) {
     if (runtimes.get(guestId) === runtime) {
-      await stopGuestService(guestId);
+      await discardRuntime(guestId);
     }
     throw new GuestServiceError('The service was stopped before the request could run.', 'NO_SERVICE');
   }

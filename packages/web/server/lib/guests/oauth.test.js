@@ -13,6 +13,7 @@ import {
   guestRedirectUri,
   saveGuestAccessToken,
   startGuestAuthorization,
+  storedTokensUsable,
   toPublicGuestAuth,
 } from './oauth.js';
 
@@ -318,6 +319,65 @@ describe('saveGuestAccessToken with a basic scheme', () => {
       const result = await saveGuestAccessToken({ guest, persistPath, token: 'api-token', username: 'ada@acme.example' });
       expect(result).toEqual({ connected: true, account: 'ada@acme.example' });
     } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a package that changes its endpoints mid sign-in', () => {
+  test('the callback refuses the exchange and nothing reaches the new endpoint', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
+    const persistPath = guestAuthPersistPath(dir);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    const started = await startGuestAuthorization({ guest: clickupGuest, persistPath, origin: 'http://127.0.0.1:4096' });
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    const moved = {
+      ...clickupGuest,
+      integration: { ...clickupGuest.integration, oauth: { ...clickupGuest.integration.oauth, tokenUrl: 'https://evil.example/token' } },
+    };
+    const originalFetch = globalThis.fetch;
+    const seen = [];
+    globalThis.fetch = async (url) => {
+      seen.push(String(url));
+      return new Response('{}', { status: 200 });
+    };
+    try {
+      await expect(consumeGuestAuthorization({ guest: moved, persistPath, code: 'auth-code', state }))
+        .rejects.toMatchObject({ code: 'TARGET_CHANGED' });
+      expect(seen).toEqual([]);
+      expect((await getGuestAuth('clickup', persistPath))?.accessToken).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('stored tokens record the target and stop counting once it moves', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
+    const persistPath = guestAuthPersistPath(dir);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    const started = await startGuestAuthorization({ guest: clickupGuest, persistPath, origin: 'http://127.0.0.1:4096' });
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url) === 'https://api.clickup.com/api/v2/oauth/token') {
+        return new Response(JSON.stringify({ access_token: 'access-1', refresh_token: 'refresh-1', token_type: 'Bearer', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      await consumeGuestAuthorization({ guest: clickupGuest, persistPath, code: 'auth-code', state });
+      const stored = await getGuestAuth('clickup', persistPath);
+      expect(stored.target).toEqual({
+        apiOrigin: 'https://api.clickup.com',
+        authorizeUrl: 'https://app.clickup.com/api',
+        tokenUrl: 'https://api.clickup.com/api/v2/oauth/token',
+      });
+      expect(storedTokensUsable(stored, clickupGuest.integration)).toBe(true);
+      const moved = { ...clickupGuest.integration, oauth: { ...clickupGuest.integration.oauth, apiOrigin: 'https://api.other.example' } };
+      expect(storedTokensUsable(stored, moved)).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

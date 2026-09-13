@@ -43,6 +43,7 @@ import {
   guestRedirectUri,
   saveGuestAccessToken,
   startGuestAuthorization,
+  takeUsableGuestAuth,
   toPublicGuestAuth,
 } from './oauth.js';
 import { proxyGuestRequest } from './request.js';
@@ -325,7 +326,9 @@ export const registerGuestRoutes = (app, {
         return res.status(404).json({ error: 'not-found' });
       }
       const origin = requestOrigin(req);
-      const stored = await getGuestAuth(guest.id, authPath);
+      // Tokens minted for addresses the package no longer names are dropped
+      // here, so the card shows disconnected instead of a stale account.
+      const stored = await takeUsableGuestAuth(guest, authPath);
       const auth = resolveIntegrationAuth(guest.integration ?? {});
       res.json({
         ...await toGuestAuthResponse(guest.integration, stored),

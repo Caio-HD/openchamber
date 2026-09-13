@@ -225,6 +225,54 @@ const fetchAccountLabel = async (api, accessToken) => {
   return { ok: true, account: readAccountLabel(payload, api.account.name) };
 };
 
+/**
+ * The addresses credentials for this integration go to: the API origin and,
+ * for OAuth, the authorize and token endpoints.
+ * @returns {{ apiOrigin: string, authorizeUrl?: string, tokenUrl?: string } | null}
+ */
+export const credentialTarget = (integration) => {
+  const api = resolveIntegrationApi(integration ?? {});
+  if (!api) {
+    return null;
+  }
+  const target = { apiOrigin: api.apiOrigin };
+  if (integration?.oauth) {
+    target.authorizeUrl = integration.oauth.authorizeUrl;
+    target.tokenUrl = integration.oauth.tokenUrl;
+  }
+  return target;
+};
+
+const sameTarget = (a, b) => Boolean(a && b)
+  && a.apiOrigin === b.apiOrigin
+  && (a.authorizeUrl ?? null) === (b.authorizeUrl ?? null)
+  && (a.tokenUrl ?? null) === (b.tokenUrl ?? null);
+
+/**
+ * Whether the stored tokens were minted for the integration as it is now.
+ * Tokens without a recorded target never count.
+ */
+export const storedTokensUsable = (stored, integration) => (
+  Boolean(stored?.accessToken) && sameTarget(stored.target, credentialTarget(integration))
+);
+
+/**
+ * Tokens that no longer match the package's addresses are dropped, so the
+ * card shows disconnected and nothing is sent to the new addresses.
+ * @returns {Promise<object | null>} the stored entry when its tokens are usable
+ */
+export const takeUsableGuestAuth = async (guest, persistPath) => {
+  const stored = await getGuestAuth(guest.id, persistPath);
+  if (!stored?.accessToken) {
+    return stored;
+  }
+  if (storedTokensUsable(stored, guest.integration)) {
+    return stored;
+  }
+  await dropGuestTokens(guest.id, persistPath);
+  return getGuestAuth(guest.id, persistPath);
+};
+
 export const saveGuestAccessToken = async ({ guest, persistPath, token, username }) => {
   if (resolveIntegrationAuth(guest.integration ?? {}) !== 'token') {
     throw new GuestOAuthError('This guest does not accept a pasted token.', 'NO_TOKEN_AUTH');
@@ -253,6 +301,7 @@ export const saveGuestAccessToken = async ({ guest, persistPath, token, username
     expiresAt: null,
     account,
     authorizedAt: Date.now(),
+    target: credentialTarget(guest.integration),
   }, persistPath);
   return { connected: true, account };
 };
@@ -275,6 +324,9 @@ export const startGuestAuthorization = async ({ guest, persistPath, origin }) =>
     guestId: guest.id,
     codeVerifier: verifier,
     redirectUri,
+    // The exchange goes to the endpoints the user saw when they clicked
+    // Connect, and only if the package still names the same ones.
+    target: credentialTarget(guest.integration),
     expiresAt: Date.now() + PENDING_AUTHORIZATION_TTL_MS,
   });
 
@@ -305,6 +357,9 @@ export const consumeGuestAuthorization = async ({ guest, persistPath, code, stat
   if (!pending) {
     throw new GuestOAuthError('Authorization state was missing or expired.', 'STATE_MISMATCH');
   }
+  if (!sameTarget(pending.target, credentialTarget(guest.integration))) {
+    throw new GuestOAuthError('The extension changed its endpoints while you were signing in. Review it in Settings → Extensions and connect again.', 'TARGET_CHANGED');
+  }
   const stored = await getGuestAuth(guest.id, persistPath);
   const clientId = readTrimmedString(stored?.clientId);
   const clientSecret = readTrimmedString(stored?.clientSecret);
@@ -312,7 +367,7 @@ export const consumeGuestAuthorization = async ({ guest, persistPath, code, stat
     throw new GuestOAuthError('Authorization code or client credentials were missing.');
   }
   const tokens = await exchangeAuthorizationCode(
-    guest.integration.oauth.tokenUrl,
+    pending.target.tokenUrl,
     {
       grant_type: 'authorization_code',
       code,
@@ -344,6 +399,7 @@ export const consumeGuestAuthorization = async ({ guest, persistPath, code, stat
     expiresAt: tokens.expiresAt,
     account,
     authorizedAt: Date.now(),
+    target: pending.target,
   }, persistPath);
   return { connected: true, account };
 };
@@ -352,14 +408,14 @@ export const refreshGuestAccessToken = async ({ guest, persistPath }) => {
   if (resolveIntegrationAuth(guest.integration ?? {}) !== 'oauth' || !guest.integration?.oauth) {
     return null;
   }
-  const stored = await getGuestAuth(guest.id, persistPath);
+  const stored = await takeUsableGuestAuth(guest, persistPath);
   const refreshToken = readTrimmedString(stored?.refreshToken);
   const clientId = readTrimmedString(stored?.clientId);
   const clientSecret = readTrimmedString(stored?.clientSecret);
   if (!refreshToken || !clientId) {
     return null;
   }
-  const tokens = await postForm(guest.integration.oauth.tokenUrl, {
+  const tokens = await postForm(stored.target.tokenUrl, {
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: clientId,
