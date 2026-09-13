@@ -320,11 +320,24 @@ export const toPublicGuest = (guest) => {
 const CATALOG_CACHE_TTL_MS = 5_000;
 /** @type {Map<string, { expiresAt: number, guests: Awaited<ReturnType<typeof listInstalledGuestsUncached>> }>} */
 const catalogCache = new Map();
+/**
+ * Bumped on every invalidation. A listing remembers the version it started
+ * at and only caches its result if nothing changed meanwhile, so a read that
+ * straddled a store write (old file, new grants) never sticks for the TTL.
+ * @type {Map<string, number>}
+ */
+const catalogVersions = new Map();
+
+const catalogVersionOf = (persistPath) => catalogVersions.get(persistPath) ?? 0;
 
 export const invalidateGuestCatalog = (persistPath) => {
   if (persistPath) {
     catalogCache.delete(persistPath);
+    catalogVersions.set(persistPath, catalogVersionOf(persistPath) + 1);
   } else {
+    for (const key of catalogCache.keys()) {
+      catalogVersions.set(key, catalogVersionOf(key) + 1);
+    }
     catalogCache.clear();
   }
 };
@@ -335,8 +348,9 @@ export const listInstalledGuests = async ({ persistPath } = {}) => {
   if (cached && cached.expiresAt > Date.now()) {
     return cached.guests;
   }
+  const version = persistPath ? catalogVersionOf(persistPath) : 0;
   const guests = await listInstalledGuestsUncached({ persistPath });
-  if (persistPath) {
+  if (persistPath && catalogVersionOf(persistPath) === version) {
     catalogCache.set(persistPath, { guests, expiresAt: Date.now() + CATALOG_CACHE_TTL_MS });
   }
   return guests;

@@ -33,6 +33,10 @@ const storeSchema = z.object({
 const capabilityScopeSchema = z.object({
   filesystem: z.array(z.string().min(1)).optional(),
   apiOrigin: z.string().min(1).optional(),
+  oauth: z.object({
+    authorizeUrl: z.string().min(1),
+    tokenUrl: z.string().min(1),
+  }).optional(),
   service: z.object({
     exec: z.array(z.string().min(1)),
     sockets: z.array(z.string().min(1)),
@@ -227,11 +231,15 @@ const writeExtensionStoreUnlocked = async (
   if (Object.keys(socketOverrides).length > 0) {
     payload.serviceSocketOverrides = socketOverrides;
   }
+  // Listeners hear about a write twice: before, so a cached catalog is
+  // dropped, and after, so a read that started in between (and saw the old
+  // file) cannot be cached as current.
   for (const listener of writeListeners) listener(persistPath);
   await fs.mkdir(path.dirname(persistPath), { recursive: true });
   const tmp = `${persistPath}.tmp-${process.pid}-${Date.now()}-${(writeSequence += 1)}`;
   await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   await fs.rename(tmp, persistPath);
+  for (const listener of writeListeners) listener(persistPath);
 };
 
 /** Replace the whole store. Prefer `updateExtensionStore` for a change based on the current contents. */
@@ -261,7 +269,7 @@ let writeSequence = 0;
 /** @type {Set<(persistPath: string) => void>} */
 const writeListeners = new Set();
 
-/** Called before every store write with the path about to change. */
+/** Called before and after every store write with the path that changes. */
 export const onExtensionStoreWrite = (listener) => {
   writeListeners.add(listener);
   return () => writeListeners.delete(listener);

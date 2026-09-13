@@ -6,7 +6,7 @@ import { parseManifestJson } from '@openchamber/sdk/schemas';
 import { requestedGuestCapabilities } from '@openchamber/sdk';
 
 import { inspectGuestPackage, invalidateGuestCatalog, listInstalledGuests } from './catalog.js';
-import { cloneGitRepository, runGit } from './clone.js';
+import { cloneGitRepository, gitNetworkArgs, runGit } from './clone.js';
 import { unwrapGuestRoot } from './extract-zip.js';
 import { guestCopiesDir, isCopiedGuestRoot } from './persist.js';
 import { stopGuestService } from './service.js';
@@ -89,8 +89,14 @@ export const checkGuestUpdate = async ({ guest, origin, gitBinary, timeoutMs = C
     return { available: false, error: 'invalid-manifest' };
   }
   const cwd = guest.packageRoot;
+  // The fetch is a network operation like the clone: no redirects, and the
+  // connection pinned to the addresses the public hostname resolves to now.
+  const network = await gitNetworkArgs(origin.url);
+  if (!network) {
+    return { available: false, error: 'fetch-failed' };
+  }
   const fetched = await runGit(
-    ['fetch', '--depth', '1', '--', 'origin', origin.ref ?? 'HEAD'],
+    [...network, 'fetch', '--depth', '1', '--', 'origin', origin.ref ?? 'HEAD'],
     { gitBinary, cwd, timeoutMs },
   );
   if (!fetched.ok) {

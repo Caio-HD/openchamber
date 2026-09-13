@@ -29,7 +29,7 @@ import { installGuest, installGuestFromZipBuffer, parseInstallRequest, uninstall
 import { guestUploadMaxBytes, readGuestUploadBody } from './upload.js';
 import { checkAllGuestUpdates, updateGuest, withGuestUpdate } from './updates.js';
 import { extensionsPersistPath, readExtensionStore, setCapabilityGrants } from './persist.js';
-import { guestGrantScope } from './grant-scope.js';
+import { guestGrantScope, sameCredentialTarget } from './grant-scope.js';
 import { dropGuestTokens, forgetGuestAuth, getGuestAuth, guestAuthPersistPath, patchGuestAuth } from './auth-store.js';
 import {
   disconnectHostGuest,
@@ -686,14 +686,15 @@ export const registerGuestRoutes = (app, {
       }
       const scope = guestGrantScope(guest);
       const store = await readExtensionStore(persistPath);
-      const previousOrigin = store.capabilityScopes?.[guest.id]?.apiOrigin;
+      const previousScope = store.capabilityScopes?.[guest.id];
       await setCapabilityGrants(guest.id, persistPath, granted, granted.length > 0 ? scope : null);
       if (granted.length === 0) {
         await stopGuestService(guest.id);
       }
-      // A token was pasted for one API origin. When a newer version points
-      // the integration somewhere else, that token must not follow it.
-      if (previousOrigin && scope.apiOrigin && previousOrigin !== scope.apiOrigin) {
+      // Credentials were stored for one API origin and one pair of OAuth
+      // endpoints. When a newer version points the integration somewhere
+      // else, they must not follow it.
+      if (previousScope?.apiOrigin && scope.apiOrigin && !sameCredentialTarget(previousScope, scope)) {
         await dropGuestTokens(guest.id, authPath);
       }
       const next = await loadGuest(guest.id);

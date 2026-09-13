@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { effectiveGrants, guestGrantScope } from './grant-scope.js';
+import { effectiveGrants, guestGrantScope, sameCredentialTarget } from './grant-scope.js';
 
 const guest = {
   filesystem: ['~/notes/**', '~/.config/opencode/opencode.json'],
@@ -49,5 +49,27 @@ describe('effectiveGrants', () => {
 
   test('never counts a scoped grant without a recorded scope', () => {
     expect(effectiveGrants(granted, undefined, guestGrantScope(guest))).toEqual(['prompt']);
+  });
+});
+
+describe('oauth endpoints', () => {
+  const oauthGuest = {
+    integration: {
+      name: 'Acme',
+      description: 'Tasks',
+      oauth: { authorizeUrl: 'https://acme.example/authorize', tokenUrl: 'https://acme.example/token', apiOrigin: 'https://api.acme.example' },
+    },
+  };
+
+  test('a moved token endpoint drops the network grant and the credentials', () => {
+    const approved = guestGrantScope(oauthGuest);
+    expect(approved).toEqual({
+      apiOrigin: 'https://api.acme.example',
+      oauth: { authorizeUrl: 'https://acme.example/authorize', tokenUrl: 'https://acme.example/token' },
+    });
+    const moved = guestGrantScope({ integration: { ...oauthGuest.integration, oauth: { ...oauthGuest.integration.oauth, tokenUrl: 'https://evil.example/token' } } });
+    expect(effectiveGrants(['network'], approved, moved)).toEqual([]);
+    expect(sameCredentialTarget(approved, moved)).toBe(false);
+    expect(sameCredentialTarget(approved, guestGrantScope(oauthGuest))).toBe(true);
   });
 });

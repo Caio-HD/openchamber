@@ -36,20 +36,58 @@ export const isPublicHostname = (hostname) => {
  * @param {string} hostname
  * @param {(hostname: string, options: { all: true }) => Promise<Array<{ address: string }>>} [lookup]
  */
-export const resolvesToPublicAddress = async (hostname, lookup = (name, options) => dns.lookup(name, options)) => {
+/**
+ * The addresses a public hostname resolves to, or `null` when the name is
+ * not public, does not resolve, or any answer is private. Callers connect to
+ * exactly these addresses, so a second lookup by the HTTP client or by git
+ * cannot answer differently.
+ * @param {string} hostname
+ * @param {(hostname: string, options: { all: true }) => Promise<Array<{ address: string, family?: number }>>} [lookup]
+ * @returns {Promise<Array<{ address: string, family: 4 | 6 }> | null>}
+ */
+export const publicAddressesOf = async (hostname, lookup = (name, options) => dns.lookup(name, options)) => {
   const host = hostname.replace(/^\[|\]$/g, '');
   if (!isPublicHostname(host)) {
-    return false;
+    return null;
   }
-  if (net.isIP(host)) {
-    return true;
+  const literal = net.isIP(host);
+  if (literal) {
+    return [{ address: host, family: literal === 6 ? 6 : 4 }];
   }
   try {
     const addresses = await lookup(host, { all: true });
-    return addresses.length > 0 && addresses.every((entry) => isPublicHostname(entry.address));
+    if (addresses.length === 0 || !addresses.every((entry) => isPublicHostname(entry.address))) {
+      return null;
+    }
+    return addresses.map((entry) => ({ address: entry.address, family: net.isIP(entry.address) === 6 ? 6 : 4 }));
   } catch {
-    return false;
+    return null;
   }
+};
+
+/**
+ * `-c` options that keep a git network operation on the checked host: no
+ * redirects, and the connection pinned to the addresses just resolved
+ * (`http.curloptResolve`, git 2.30+; older builds ignore the key and keep
+ * the redirect rule). `null` when the URL is https but not public.
+ * @param {string} url
+ * @param {Parameters<typeof publicAddressesOf>[1]} [lookup]
+ * @returns {Promise<string[] | null>}
+ */
+export const gitNetworkArgs = async (url, lookup) => {
+  const hostname = httpsHostname(url);
+  if (hostname === null) {
+    return [];
+  }
+  const addresses = await publicAddressesOf(hostname, lookup);
+  if (!addresses) {
+    return null;
+  }
+  const port = new URL(url).port || '443';
+  return [
+    '-c', 'http.followRedirects=false',
+    '-c', `http.curloptResolve=${hostname}:${port}:${addresses.map((entry) => entry.address).join(',')}`,
+  ];
 };
 
 const isHttpsGitUrl = (value) => {
@@ -181,14 +219,12 @@ export const cloneGitRepository = async (source, dest, { gitBinary = 'git', time
     return { ok: false, code: 'clone-failed' };
   }
   // Install and update only ever pass a public https URL here (the route
-  // checks the shape); tests clone local paths, which have no host to check.
-  const hostname = httpsHostname(source);
-  if (hostname !== null && !await resolvesToPublicAddress(hostname, lookup)) {
+  // checks the shape); tests clone local paths, which have no host to pin.
+  const network = await gitNetworkArgs(source, lookup);
+  if (!network) {
     return { ok: false, code: 'clone-failed' };
   }
-  // git follows HTTP redirects on its own; a public host must not be able to
-  // bounce the clone onto a private one.
-  const args = ['-c', 'http.followRedirects=false', 'clone', '--depth', '1'];
+  const args = [...network, 'clone', '--depth', '1'];
   if (ref) {
     args.push('--branch', ref);
   }

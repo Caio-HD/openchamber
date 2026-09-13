@@ -350,3 +350,24 @@ describe('grant scopes', () => {
     }
   });
 });
+
+describe('catalog cache under a store write', () => {
+  test('a listing that started before a withdrawal is not cached as current', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-'));
+    const persistPath = path.join(dir, 'extensions.json');
+    const root = path.join(dir, 'hello');
+    try {
+      await writeBuiltGuest(root);
+      await writeExtensionPaths([root], persistPath);
+      await setCapabilityGrants('hello', persistPath, ['prompt'], null);
+      // Start a listing (it reads the old file) and withdraw while it runs.
+      const early = listInstalledGuests({ persistPath });
+      await setCapabilityGrants('hello', persistPath, [], null);
+      await early;
+      const [after] = await listInstalledGuests({ persistPath });
+      expect(after.capabilityGrants).toEqual([]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

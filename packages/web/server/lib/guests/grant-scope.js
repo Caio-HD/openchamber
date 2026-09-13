@@ -22,6 +22,14 @@ export const guestGrantScope = (guest) => {
     if (api?.apiOrigin) {
       scope.apiOrigin = api.apiOrigin;
     }
+    // The stored refresh token and client secret travel to these two URLs;
+    // a package that moves either one has not been approved for them.
+    if (guest.integration.oauth) {
+      scope.oauth = {
+        authorizeUrl: guest.integration.oauth.authorizeUrl,
+        tokenUrl: guest.integration.oauth.tokenUrl,
+      };
+    }
   }
   if (guest.service) {
     scope.service = {
@@ -31,6 +39,19 @@ export const guestGrantScope = (guest) => {
   }
   return scope;
 };
+
+const sameOauth = (a, b) => (
+  (!a && !b) || Boolean(a && b && a.authorizeUrl === b.authorizeUrl && a.tokenUrl === b.tokenUrl)
+);
+
+/**
+ * Whether the credentials pasted or minted for one integration may still be
+ * used with the package as it is now: same API origin and same OAuth
+ * endpoints. Otherwise the tokens are dropped at re-approval.
+ */
+export const sameCredentialTarget = (stored, current) => (
+  Boolean(stored?.apiOrigin) && stored.apiOrigin === current.apiOrigin && sameOauth(stored.oauth, current.oauth)
+);
 
 const sameList = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
 
@@ -47,7 +68,9 @@ export const effectiveGrants = (granted, stored, current) => granted.filter((cap
     return Boolean(stored?.filesystem) && sameList(stored.filesystem, current.filesystem ?? []);
   }
   if (capability === 'network') {
-    return Boolean(stored?.apiOrigin) && stored.apiOrigin === current.apiOrigin;
+    return Boolean(stored?.apiOrigin)
+      && stored.apiOrigin === current.apiOrigin
+      && sameOauth(stored.oauth, current.oauth);
   }
   if (capability === 'service') {
     return Boolean(stored?.service)

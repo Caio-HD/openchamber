@@ -222,3 +222,26 @@ describe('pause during startup', () => {
     }
   });
 });
+
+describe('pause before the request reads the store', () => {
+  test('a stop that lands before the first read still wins', async () => {
+    const { dir, persistPath, packageRoot } = await writeFixture();
+    try {
+      await setCapabilityGrants('docker', persistPath, ['service']);
+      const pending = proxyGuestServiceRequest({
+        guestId: 'docker',
+        packageRoot,
+        service: { entry: 'service/main.js', permissions: { exec: ['docker'] } },
+        granted: ['service'],
+        persistPath,
+        method: 'GET',
+        path: '/ping',
+      });
+      await stopGuestService('docker');
+      await expect(pending).rejects.toMatchObject({ code: 'NO_SERVICE' });
+      expect(getServiceStatus('docker')).toBe('stopped');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

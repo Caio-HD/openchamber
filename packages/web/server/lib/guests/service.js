@@ -425,6 +425,10 @@ export const proxyGuestServiceRequest = async ({
   if (!isGuestRequestPath(requestPath)) {
     throw new GuestServiceError('Request path must stay on the service.', 'BAD_PATH');
   }
+  // A Pause that lands anywhere between here and the proxied call bumps
+  // this; the request then ends with NO_SERVICE instead of using the
+  // enabled flag it read before the pause.
+  const epoch = stopEpochOf(guestId);
   const store = await readExtensionStore(persistPath);
   if (store.disabledGuests?.[guestId]) {
     const label = typeof guestName === 'string' && guestName.trim() ? guestName.trim() : 'This extension';
@@ -454,6 +458,12 @@ export const proxyGuestServiceRequest = async ({
       socketBindings,
       socketOverrides,
     });
+  }
+  if (stopEpochOf(guestId) !== epoch) {
+    if (runtimes.get(guestId) === runtime) {
+      await stopGuestService(guestId);
+    }
+    throw new GuestServiceError('The service was stopped before the request could run.', 'NO_SERVICE');
   }
 
   let url;

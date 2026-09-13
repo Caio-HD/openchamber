@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import https from 'node:https';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -9,7 +10,7 @@ import {
   toPublicGuest,
 } from './catalog.js';
 import { stopGuestService } from './service.js';
-import { cloneGitRepository, isHttpsZipUrl, isPublicHostname, parseGitInstallUrl, resolvesToPublicAddress } from './clone.js';
+import { cloneGitRepository, isHttpsZipUrl, isPublicHostname, parseGitInstallUrl, publicAddressesOf } from './clone.js';
 import { extractZipBuffer, unwrapGuestRoot } from './extract-zip.js';
 import {
   guestCopiesDir,
@@ -19,6 +20,7 @@ import {
 } from './persist.js';
 
 const MAX_ZIP_BYTES = 20 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
 
 const installBodySchema = z.object({
   path: z.string().trim().min(1).optional(),
@@ -154,46 +156,95 @@ const readLocalZip = async (filePath) => {
 const MAX_ZIP_REDIRECTS = 5;
 
 /**
+ * One https request pinned to an address the caller already checked. The
+ * socket goes to `address`; TLS still verifies the certificate against the
+ * URL's hostname. Redirects are not followed: the status and `location` come
+ * back for the caller to check. The body is capped while it streams.
+ * @param {string} url
+ * @param {{ address: string, family: 4 | 6 }} target
+ * @param {number} maxBytes
+ * @returns {Promise<{ status: number, location: string | null, body: Buffer | null }>}
+ */
+const requestHttpsPinned = (url, target, maxBytes) => new Promise((resolve, reject) => {
+  const parsed = new URL(url);
+  const request = https.request(parsed, {
+    method: 'GET',
+    // Node's connector asks for `all` addresses when it tries families in
+    // parallel; either way it only ever gets the one that was checked.
+    lookup: (_hostname, options, callback) => (
+      options?.all
+        ? callback(null, [{ address: target.address, family: target.family }])
+        : callback(null, target.address, target.family)
+    ),
+    autoSelectFamily: false,
+    headers: { 'User-Agent': 'openchamber' },
+    timeout: DOWNLOAD_TIMEOUT_MS,
+  }, (response) => {
+    const status = response.statusCode ?? 0;
+    const location = typeof response.headers.location === 'string' ? response.headers.location : null;
+    if (status >= 300 && status < 400) {
+      response.resume();
+      resolve({ status, location, body: null });
+      return;
+    }
+    const declared = Number(response.headers['content-length']);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      response.destroy();
+      resolve({ status, location, body: null });
+      return;
+    }
+    /** @type {Buffer[]} */
+    const chunks = [];
+    let received = 0;
+    response.on('data', (chunk) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        response.destroy();
+        resolve({ status, location, body: null });
+        return;
+      }
+      chunks.push(chunk);
+    });
+    response.on('end', () => resolve({ status, location, body: Buffer.concat(chunks) }));
+    response.on('error', reject);
+  });
+  request.on('timeout', () => request.destroy(new Error('download timed out')));
+  request.on('error', reject);
+  request.end();
+});
+
+/**
  * Fetch the archive by hand, one hop at a time. A public URL can redirect to
  * a private one, so every hop is checked (https, public host, public DNS
- * answer) before the request is made, not after the bytes arrived.
+ * answer) before the request is made, and the request goes to the address
+ * that was checked, not to whatever a second lookup would say.
  * @param {string} url
- * @param {{ fetchImpl?: typeof fetch, lookup?: Parameters<typeof resolvesToPublicAddress>[1] }} [options]
+ * @param {{ request?: typeof requestHttpsPinned, lookup?: Parameters<typeof publicAddressesOf>[1] }} [options]
  */
-export const downloadZip = async (url, { fetchImpl = fetch, lookup } = {}) => {
+export const downloadZip = async (url, { request = requestHttpsPinned, lookup } = {}) => {
   let current = url;
-  let response = null;
   for (let hop = 0; hop <= MAX_ZIP_REDIRECTS; hop += 1) {
     if (!isHttpsZipUrl(current) && !isHttpsRedirectUrl(current)) {
       return null;
     }
-    if (!await resolvesToPublicAddress(new URL(current).hostname, lookup)) {
+    const addresses = await publicAddressesOf(new URL(current).hostname, lookup);
+    if (!addresses) {
       return null;
     }
-    const hopResponse = await fetchImpl(current, { redirect: 'manual' });
-    if (hopResponse.status >= 300 && hopResponse.status < 400) {
-      const location = hopResponse.headers.get('location');
-      if (!location) {
+    const response = await request(current, addresses[0], MAX_ZIP_BYTES);
+    if (response.status >= 300 && response.status < 400) {
+      if (!response.location) {
         return null;
       }
-      current = new URL(location, current).href;
+      current = new URL(response.location, current).href;
       continue;
     }
-    response = hopResponse;
-    break;
+    if (response.status < 200 || response.status >= 300 || !response.body) {
+      return null;
+    }
+    return response.body;
   }
-  if (!response || !response.ok) {
-    return null;
-  }
-  const length = Number(response.headers.get('content-length'));
-  if (Number.isFinite(length) && length > MAX_ZIP_BYTES) {
-    return null;
-  }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > MAX_ZIP_BYTES) {
-    return null;
-  }
-  return buffer;
+  return null;
 };
 
 /**
