@@ -64,7 +64,10 @@ const setupRemote = async (dir, id, version = '1.0.0') => {
   await writeGuest(work, id, version);
   git(work, ['init', '-q', '--template=', '-b', 'main']);
   commit(work, 'init');
-  git(dir, ['init', '-q', '--bare', '--template=', bare]);
+  // The bare repo's HEAD must name the branch that gets pushed; without -b
+  // it follows the machine's init.defaultBranch (master on CI), and a clone
+  // of a bare repo whose HEAD points at a missing branch checks out nothing.
+  git(dir, ['init', '-q', '--bare', '--template=', '-b', 'main', bare]);
   git(work, ['remote', 'add', 'origin', bare]);
   git(work, ['push', '-q', 'origin', 'main']);
   return { work, bare };

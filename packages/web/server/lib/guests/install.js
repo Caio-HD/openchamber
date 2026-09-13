@@ -98,11 +98,14 @@ const installCopiedGuest = async ({ source, prepare, persistPath, openchamberVer
     }
     const dest = path.join(copies, inspected.guest.id);
     const store = await readExtensionStore(persistPath);
+    // The store may hold this copy's path as written (Linux) or as its
+    // realpath (macOS, where /tmp is a symlink); either way it is the same
+    // package already installed, not another folder claiming the id.
     const registered = store.paths.some((entry) => path.resolve(entry) === dest);
     if (registered) {
       if (!replace) {
         await removeDir(staging);
-        return { ok: false, code: 'id-taken', id: inspected.guest.id };
+        return { ok: false, code: 'already-installed', id: inspected.guest.id };
       }
       const removed = await uninstallGuest(inspected.guest.id, persistPath);
       if (!removed.ok) {
