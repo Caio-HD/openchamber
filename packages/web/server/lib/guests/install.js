@@ -98,10 +98,11 @@ const installCopiedGuest = async ({ source, prepare, persistPath, openchamberVer
     }
     const dest = path.join(copies, inspected.guest.id);
     const store = await readExtensionStore(persistPath);
-    // The store may hold this copy's path as written (Linux) or as its
-    // realpath (macOS, where /tmp is a symlink); either way it is the same
+    // The store holds the copy's realpath (on macOS /tmp is a symlink, so
+    // that differs from `dest` as spelled); either spelling is the same
     // package already installed, not another folder claiming the id.
-    const registered = store.paths.some((entry) => path.resolve(entry) === dest);
+    const destReal = await fs.realpath(dest).catch(() => dest);
+    const registered = store.paths.some((entry) => path.resolve(entry) === dest || path.resolve(entry) === destReal);
     if (registered) {
       if (!replace) {
         await removeDir(staging);
@@ -125,8 +126,10 @@ const installCopiedGuest = async ({ source, prepare, persistPath, openchamberVer
     const persisted = await persistGuest(inspected.guest, root, source, persistPath, { replace, origin });
     if (!persisted.ok) {
       await removeDir(dest);
+      return persisted;
     }
-    return persisted;
+    // A registered copy was uninstalled above before this one took its place.
+    return registered ? { ...persisted, replaced: true } : persisted;
   } catch {
     await removeDir(staging);
     return { ok: false, code: source === 'git' ? 'clone-failed' : 'extract-failed' };
