@@ -47,6 +47,8 @@ export const useGuestSurfaces = (): ContextSurfaceDescriptor[] => {
 
   return React.useMemo(() => {
     return enabledGuestSurfaces(guests, getRuntimeUrlResolver().authenticatedAsset);
+    // runtimeKey: the asset resolver answers for the active runtime, so a switch recomputes the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guests, runtimeKey]);
 };
 
@@ -102,5 +104,7 @@ export const useGuestAttachItems = (): GuestAttachItem[] => {
       });
     }
     return items;
+    // runtimeKey: the asset resolver answers for the active runtime, so a switch recomputes the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guests, runtimeKey]);
 };

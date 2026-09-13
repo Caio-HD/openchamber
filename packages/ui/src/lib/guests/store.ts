@@ -38,7 +38,8 @@ export const useGuestsStore = create<GuestsState>((set, get) => ({
       if (!next && !guest.update) return guest;
       changed = true;
       if (!next) {
-        const { update: _dropped, ...rest } = guest;
+        const rest = { ...guest };
+        delete rest.update;
         return rest;
       }
       return { ...guest, update: next };
