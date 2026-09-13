@@ -179,10 +179,11 @@ export const encodeBasicCredential = (username, token) => Buffer.from(`${usernam
 
 export const guestRedirectUri = (origin, guestId) => `${origin.replace(/\/+$/, '')}/api/guests/${guestId}/oauth/callback`;
 
-export const toPublicGuestAuth = (entry) => ({
+/** With `integration`, `hasClient` is false for a client entered for endpoints the package no longer names. */
+export const toPublicGuestAuth = (entry, integration) => ({
   connected: Boolean(entry?.accessToken),
   account: typeof entry?.account === 'string' ? entry.account : '',
-  hasClient: Boolean(entry?.clientId),
+  hasClient: integration ? Boolean(usableClientCredentials(entry, integration).clientId) : Boolean(entry?.clientId),
   settings: entry?.settings && typeof entry.settings === 'object' ? { ...entry.settings } : {},
 });
 
@@ -257,6 +258,21 @@ export const storedTokensUsable = (stored, integration) => (
 );
 
 /**
+ * The client id and secret, only when they were entered for the endpoints
+ * the package names now. Anything else is treated as missing.
+ * @returns {{ clientId: string, clientSecret: string }}
+ */
+export const usableClientCredentials = (stored, integration) => {
+  if (!sameTarget(stored?.clientTarget, credentialTarget(integration))) {
+    return { clientId: '', clientSecret: '' };
+  }
+  return {
+    clientId: readTrimmedString(stored?.clientId),
+    clientSecret: readTrimmedString(stored?.clientSecret),
+  };
+};
+
+/**
  * Tokens that no longer match the package's addresses are dropped, so the
  * card shows disconnected and nothing is sent to the new addresses.
  * @returns {Promise<object | null>} the stored entry when its tokens are usable
@@ -312,7 +328,7 @@ export const startGuestAuthorization = async ({ guest, persistPath, origin }) =>
     throw new GuestOAuthError('This guest does not declare OAuth.', 'NO_INTEGRATION');
   }
   const stored = await getGuestAuth(guest.id, persistPath);
-  const clientId = readTrimmedString(stored?.clientId);
+  const { clientId } = usableClientCredentials(stored, guest.integration);
   if (!clientId) {
     throw new GuestOAuthError('Client id is missing. Save it in Integrations first.', 'CLIENT_MISSING');
   }
@@ -361,8 +377,7 @@ export const consumeGuestAuthorization = async ({ guest, persistPath, code, stat
     throw new GuestOAuthError('The extension changed its endpoints while you were signing in. Review it in Settings → Extensions and connect again.', 'TARGET_CHANGED');
   }
   const stored = await getGuestAuth(guest.id, persistPath);
-  const clientId = readTrimmedString(stored?.clientId);
-  const clientSecret = readTrimmedString(stored?.clientSecret);
+  const { clientId, clientSecret } = usableClientCredentials(stored, guest.integration);
   if (!clientId || !code) {
     throw new GuestOAuthError('Authorization code or client credentials were missing.');
   }
@@ -392,7 +407,9 @@ export const consumeGuestAuthorization = async ({ guest, persistPath, code, stat
   } catch {
     account = '';
   }
-  await patchGuestAuth(guest.id, {
+  // The client that made this exchange must still be the one on file, for
+  // the same endpoints, when the tokens land.
+  const saved = await patchGuestAuth(guest.id, {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
     tokenType: tokens.tokenType,
@@ -400,7 +417,12 @@ export const consumeGuestAuthorization = async ({ guest, persistPath, code, stat
     account,
     authorizedAt: Date.now(),
     target: pending.target,
-  }, persistPath);
+  }, persistPath, (current) => (
+    readTrimmedString(current?.clientId) === clientId && sameTarget(current?.clientTarget, pending.target)
+  ));
+  if (!saved || saved.accessToken !== tokens.accessToken) {
+    throw new GuestOAuthError('The client credentials changed while you were signing in. Connect again.', 'TARGET_CHANGED');
+  }
   return { connected: true, account };
 };
 
@@ -410,23 +432,34 @@ export const refreshGuestAccessToken = async ({ guest, persistPath }) => {
   }
   const stored = await takeUsableGuestAuth(guest, persistPath);
   const refreshToken = readTrimmedString(stored?.refreshToken);
-  const clientId = readTrimmedString(stored?.clientId);
-  const clientSecret = readTrimmedString(stored?.clientSecret);
+  const { clientId, clientSecret } = usableClientCredentials(stored, guest.integration);
   if (!refreshToken || !clientId) {
     return null;
   }
-  const tokens = await postForm(stored.target.tokenUrl, {
+  const target = stored.target;
+  const previousAccessToken = stored.accessToken;
+  const tokens = await postForm(target.tokenUrl, {
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: clientId,
     client_secret: clientSecret,
   });
-  await patchGuestAuth(guest.id, {
+  // The round trip took time. If the entry moved on meanwhile (a new
+  // Connect for other endpoints, a disconnect), this answer belongs to the
+  // old entry and is dropped rather than written under the new target.
+  const saved = await patchGuestAuth(guest.id, {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken ?? refreshToken,
     tokenType: tokens.tokenType,
     expiresAt: tokens.expiresAt,
-  }, persistPath);
+  }, persistPath, (current) => (
+    current?.accessToken === previousAccessToken
+    && readTrimmedString(current?.refreshToken) === refreshToken
+    && sameTarget(current?.target, target)
+  ));
+  if (!saved || saved.accessToken !== tokens.accessToken) {
+    return null;
+  }
   return tokens.accessToken;
 };
 

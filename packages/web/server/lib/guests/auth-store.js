@@ -23,6 +23,14 @@ const guestAuthEntrySchema = z.object({
     authorizeUrl: z.string().min(1).optional(),
     tokenUrl: z.string().min(1).optional(),
   }).optional(),
+  // Where the client id and secret were entered for. A package that moved
+  // its endpoints gets no client credentials until the user enters them
+  // again; they are never carried over.
+  clientTarget: z.object({
+    apiOrigin: z.string().min(1),
+    authorizeUrl: z.string().min(1).optional(),
+    tokenUrl: z.string().min(1).optional(),
+  }).optional(),
 });
 
 const storeSchema = z.object({
@@ -104,9 +112,20 @@ export const getGuestAuth = async (guestId, persistPath) => {
   return store.guests[guestId] ?? null;
 };
 
-export const patchGuestAuth = (guestId, patch, persistPath) => withAuthStoreLock(persistPath, async () => {
+/**
+ * Apply `patch` to one guest's entry, read and written under the store lock.
+ * With `expect`, the patch only lands when the entry read under the lock
+ * satisfies it; a caller that spent a network round trip on the old entry
+ * (a token refresh) uses this to drop its result when the entry moved on.
+ * Returns the entry as stored afterwards, or `null` when it is gone.
+ */
+export const patchGuestAuth = (guestId, patch, persistPath, expect = null) => withAuthStoreLock(persistPath, async () => {
   const store = await readGuestAuthStore(persistPath);
-  const next = { ...(store.guests[guestId] ?? {}) };
+  const current = store.guests[guestId] ?? null;
+  if (expect && !expect(current)) {
+    return current;
+  }
+  const next = { ...(current ?? {}) };
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
       delete next[key];

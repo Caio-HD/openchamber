@@ -7,11 +7,13 @@ import { getGuestAuth, guestAuthPersistPath, patchGuestAuth } from './auth-store
 import {
   clearGuestPendingForTests,
   consumeGuestAuthorization,
+  credentialTarget,
   createPkcePair,
   encodeBasicCredential,
   guestAuthorizationHeader,
   guestRedirectUri,
   saveGuestAccessToken,
+  refreshGuestAccessToken,
   startGuestAuthorization,
   storedTokensUsable,
   toPublicGuestAuth,
@@ -63,7 +65,7 @@ describe('startGuestAuthorization', () => {
   test('builds a PKCE authorize URL after a client id is saved', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
     const started = await startGuestAuthorization({
       guest: clickupGuest,
       persistPath,
@@ -99,7 +101,7 @@ describe('consumeGuestAuthorization', () => {
   test('stores tokens from the token endpoint and never returns them', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
     const started = await startGuestAuthorization({
       guest: clickupGuest,
       persistPath,
@@ -145,7 +147,7 @@ describe('consumeGuestAuthorization', () => {
   test('rejects a callback without state even when this guest has one pending exchange', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
     await startGuestAuthorization({
       guest: clickupGuest,
       persistPath,
@@ -184,7 +186,7 @@ describe('consumeGuestAuthorization', () => {
   test('falls back to a JSON token body when form exchange fails', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
     const started = await startGuestAuthorization({
       guest: clickupGuest,
       persistPath,
@@ -328,7 +330,7 @@ describe('a package that changes its endpoints mid sign-in', () => {
   test('the callback refuses the exchange and nothing reaches the new endpoint', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
     const started = await startGuestAuthorization({ guest: clickupGuest, persistPath, origin: 'http://127.0.0.1:4096' });
     const state = new URL(started.authorizationUrl).searchParams.get('state');
     const moved = {
@@ -355,7 +357,7 @@ describe('a package that changes its endpoints mid sign-in', () => {
   test('stored tokens record the target and stop counting once it moves', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
     const persistPath = guestAuthPersistPath(dir);
-    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret' }, persistPath);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
     const started = await startGuestAuthorization({ guest: clickupGuest, persistPath, origin: 'http://127.0.0.1:4096' });
     const state = new URL(started.authorizationUrl).searchParams.get('state');
     const originalFetch = globalThis.fetch;
@@ -376,6 +378,68 @@ describe('a package that changes its endpoints mid sign-in', () => {
       expect(storedTokensUsable(stored, clickupGuest.integration)).toBe(true);
       const moved = { ...clickupGuest.integration, oauth: { ...clickupGuest.integration.oauth, apiOrigin: 'https://api.other.example' } };
       expect(storedTokensUsable(stored, moved)).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('client credentials after the package moved its endpoints', () => {
+  const moved = {
+    ...clickupGuest,
+    integration: { ...clickupGuest.integration, oauth: { ...clickupGuest.integration.oauth, tokenUrl: 'https://evil.example/token' } },
+  };
+
+  test('a new Connect refuses to reuse the old client id and secret', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
+    const persistPath = guestAuthPersistPath(dir);
+    await patchGuestAuth('clickup', { clientId: 'app-id', clientSecret: 'app-secret', clientTarget: credentialTarget(clickupGuest.integration) }, persistPath);
+    try {
+      await expect(startGuestAuthorization({ guest: moved, persistPath, origin: 'http://127.0.0.1:4096' }))
+        .rejects.toMatchObject({ code: 'CLIENT_MISSING' });
+      expect(toPublicGuestAuth(await getGuestAuth('clickup', persistPath), moved.integration).hasClient).toBe(false);
+      expect(toPublicGuestAuth(await getGuestAuth('clickup', persistPath), clickupGuest.integration).hasClient).toBe(true);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a refresh that finished after a new Connect for other endpoints is dropped', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
+    const persistPath = guestAuthPersistPath(dir);
+    await patchGuestAuth('clickup', {
+      clientId: 'app-id',
+      clientSecret: 'app-secret',
+      clientTarget: credentialTarget(clickupGuest.integration),
+      accessToken: 'access-a',
+      refreshToken: 'refresh-a',
+      target: credentialTarget(clickupGuest.integration),
+    }, persistPath);
+    const originalFetch = globalThis.fetch;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    globalThis.fetch = async () => {
+      await gate;
+      return new Response(JSON.stringify({ access_token: 'access-a2', refresh_token: 'refresh-a2', token_type: 'Bearer', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      const refreshing = refreshGuestAccessToken({ guest: clickupGuest, persistPath });
+      // Meanwhile the user connected the moved package: new client, new tokens, new target.
+      await patchGuestAuth('clickup', {
+        clientId: 'app-id-b',
+        clientSecret: 'app-secret-b',
+        clientTarget: credentialTarget(moved.integration),
+        accessToken: 'access-b',
+        refreshToken: 'refresh-b',
+        target: credentialTarget(moved.integration),
+      }, persistPath);
+      release();
+      expect(await refreshing).toBeNull();
+      const stored = await getGuestAuth('clickup', persistPath);
+      expect(stored.accessToken).toBe('access-b');
+      expect(stored.refreshToken).toBe('refresh-b');
+      expect(stored.target).toEqual(credentialTarget(moved.integration));
     } finally {
       globalThis.fetch = originalFetch;
       await fs.rm(dir, { recursive: true, force: true });

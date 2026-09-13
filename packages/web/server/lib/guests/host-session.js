@@ -15,7 +15,7 @@ const linearAccountLabel = (auth) => (
 );
 
 export const toGuestAuthResponse = async (integration, stored) => {
-  const published = toPublicGuestAuth(stored);
+  const published = toPublicGuestAuth(stored, integration);
   if (!isHostLinear(integration)) {
     return published;
   }
