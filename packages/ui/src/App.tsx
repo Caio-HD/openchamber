@@ -54,8 +54,6 @@ import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
 import type { RuntimeAPIs } from '@/lib/api/types';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { McpOAuthCallbackPage } from '@/components/sections/mcp/McpOAuthCallbackPage';
-import { MCP_OAUTH_CALLBACK_PATH } from '@/components/sections/mcp/mcpOAuth';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import { useI18n } from '@/lib/i18n';
 import { applyMobileKeyboardMode } from '@/lib/mobileKeyboardMode';
@@ -152,14 +150,6 @@ const readEmbeddedSessionChatConfig = (): EmbeddedSessionChatConfig | null => {
       ? params.get('allowPromptingSubagentSessions') === '1'
       : undefined,
   };
-};
-
-const isMcpOAuthCallbackPath = (): boolean => {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  return window.location.pathname === MCP_OAUTH_CALLBACK_PATH;
 };
 
 const EmbeddedSessionChatContent: React.FC<{
@@ -275,7 +265,6 @@ function App({ apis }: AppProps) {
   const appReadyDispatchedRef = React.useRef(false);
   const embeddedSessionChat = React.useMemo<EmbeddedSessionChatConfig | null>(() => readEmbeddedSessionChatConfig(), []);
   const embeddedBackgroundWorkEnabled = !embeddedSessionChat || isEmbeddedVisible;
-  const isMcpOAuthCallback = React.useMemo(() => isMcpOAuthCallbackPath(), []);
 
   React.useEffect(() => {
     setStreamPerfEnabled(showMemoryDebug);
@@ -919,14 +908,6 @@ function App({ apis }: AppProps) {
             </TooltipProvider>
           </RuntimeAPIProvider>
         </SyncProvider>
-      </ErrorBoundary>
-    );
-  }
-
-  if (isMcpOAuthCallback) {
-    return (
-      <ErrorBoundary>
-        <McpOAuthCallbackPage />
       </ErrorBoundary>
     );
   }

@@ -1,6 +1,6 @@
 import { SidebarTerminalActivity } from './SidebarTerminalActivity';
 import React from 'react';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { usePrefetchSessionMessages } from '@/sync/use-sync';
 import { useUIStore } from '@/stores/useUIStore';
@@ -163,7 +163,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const [editTitle, setEditTitle] = React.useState('');
   const [openSidebarMenuKey, setOpenSidebarMenuKey] = React.useState<string | null>(null);
   const [deleteSessionConfirm, setDeleteSessionConfirm] = React.useState<DeleteSessionConfirmState>(null);
-  const [copiedSessionId, setCopiedSessionId] = React.useState<string | null>(null);
   const [folderRename, setFolderRename] = React.useState<{ scopeKey: string; folderId: string; draft: string } | null>(null);
   const startFolderRename = React.useCallback((scopeKey: string, folder: { id: string; name: string }) => {
     setFolderRename({ scopeKey, folderId: folder.id, draft: folder.name });
@@ -372,7 +371,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     expandedParents,
     editingId,
     editTitle,
-    copiedSessionId,
     sessionBatchSize: singleProjectMode && !view.useGroupedSections ? 20 : undefined,
     setEditingId,
     setEditTitle,
@@ -386,7 +384,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     deleteSessionConfirm,
     setDeleteSessionConfirm,
     startFolderRename,
-    setCopiedSessionId,
     startSessionWorktreeMenuLoad: actions.startSessionWorktreeMenuLoad,
     folderRename,
     setFolderRenameDraft,
@@ -406,8 +403,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     clearFolderRename,
     startFolderRename,
     deleteSessionConfirm,
-    copiedSessionId,
-    setCopiedSessionId,
     actions.startSessionWorktreeMenuLoad,
     rowActions,
     toggleParent,
@@ -471,7 +466,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       notifyOnSubtasks={notifyOnSubtasks}
       editingId={editingId}
       editTitle={editTitle}
-      copiedSessionId={copiedSessionId}
       openSidebarMenuKey={openSidebarMenuKey}
       mobileVariant={view.mobileVariant}
       alwaysShowActions={alwaysShowActions}
@@ -488,7 +482,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       deleteSessionConfirm={deleteSessionConfirm}
       setDeleteSessionConfirm={setDeleteSessionConfirm}
       startFolderRename={startFolderRename}
-      setCopiedSessionId={setCopiedSessionId}
       startSessionWorktreeMenuLoad={actions.startSessionWorktreeMenuLoad}
       chatSessions={collection.chatSessions}
       renderChatsSection={renderChatsSection}
@@ -500,7 +493,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     alwaysShowActions,
     collection.childrenMap,
     collection.pinnedSessionIds,
-    copiedSessionId,
     deleteSessionConfirm,
     editTitle,
     editingId,

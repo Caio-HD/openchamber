@@ -1,0 +1,795 @@
+/**
+ * Sync events: the vocabulary the sync layer reduces.
+ *
+ * OpenCode v2 publishes a durable event log (`session.text.delta`,
+ * `session.tool.called`, `session.step.ended`, ...). The sync stores keep
+ * working in terms of messages and parts, so every wire event is translated
+ * here into one or more `SyncEvent`s that name the store field they touch:
+ * a message appeared, a part grew, a tool call changed state. The reducer
+ * never sees wire shapes, and this translation is pure (no store access), so
+ * the pipeline can coalesce deltas before the reducer runs.
+ *
+ * Part identity follows `partIds` in `./model`: text and reasoning items are
+ * addressed by `(assistantMessageID, ordinal)`, tool calls by their call id.
+ */
+
+import type { OpenCodeEvent } from "@opencode/client"
+import {
+  compact,
+  partIds,
+  type FilePart,
+  type FormRequest,
+  type JsonValue,
+  type Message,
+  type Metadata,
+  type ModelRef,
+  type Part,
+  type PermissionRequest,
+  type PermissionRuleset,
+  type Session,
+  type SessionStatus,
+  type StructuredError,
+  type TokenUsageInfo,
+} from "./model"
+import { projectAssistantContent, projectUserParts, structuredErrorText, toolAttachments, toolOutputText } from "./projection"
+
+// ---------------------------------------------------------------------------
+// Event vocabulary
+// ---------------------------------------------------------------------------
+
+/** Fields of a session that change after creation. `null` clears a value. */
+export type SessionPatch = {
+  title?: string
+  directory?: string
+  projectID?: string
+  subpath?: string | null
+  agent?: string
+  model?: ModelRef
+  cost?: number
+  tokens?: TokenUsageInfo
+  permissions?: PermissionRuleset
+  revert?: Session["revert"] | null
+  outcome?: Session["outcome"]
+  /** Full replacement of the session's metadata (OpenChamber-owned overlay). */
+  metadata?: Metadata
+  /** `archived: null` restores an archived session. */
+  time?: Partial<Omit<Session["time"], "archived">> & { archived?: number | null }
+}
+
+/** Fields of a message that change after it appeared. */
+export type MessagePatch = {
+  time?: { created?: number; streamed?: number; completed?: number }
+  finish?: Extract<Message, { role: "assistant" }>["finish"]
+  error?: StructuredError
+  cost?: number
+  tokens?: TokenUsageInfo
+  snapshot?: { start?: string; end?: string; files?: string[] }
+  retry?: Extract<Message, { role: "assistant" }>["retry"] | null
+  /** Shell messages: exit status and captured output. */
+  shell?: { status: "running" | "exited" | "timeout" | "killed"; exit?: number; output?: Extract<Message, { role: "shell" }>["output"] }
+}
+
+/** State transitions of a tool call that need the part's existing state to apply. */
+export type ToolTransition =
+  | { kind: "input"; raw: string }
+  | { kind: "called"; input: Record<string, JsonValue>; executed: boolean; start: number }
+  | { kind: "progress"; metadata: Metadata }
+  | { kind: "success"; output: string; attachments?: FilePart[]; metadata?: Metadata; executed: boolean; end: number }
+  | { kind: "failed"; error: string; output?: string; metadata?: Metadata; executed: boolean; end: number }
+
+/**
+ * What OpenCode rebuilt. v2 watches its own config files and announces the
+ * rebuilt slice without saying which entry changed, so each kind names the
+ * lists that have to be re-read.
+ */
+export type CatalogKind =
+  | "config"
+  | "agent"
+  | "command"
+  | "skill"
+  | "plugin"
+  | "provider"
+  | "model"
+  | "credential"
+  | "project"
+
+export type SyncEvent =
+  | { type: "server.connected"; properties: Record<never, never> }
+  | { type: "installation.update-available"; properties: { version: string } }
+  | { type: "session.created"; properties: { info: Session } }
+  | { type: "session.patched"; properties: { sessionID: string; patch: SessionPatch } }
+  | { type: "session.deleted"; properties: { sessionID: string } }
+  | { type: "session.status"; properties: { sessionID: string; status: SessionStatus } }
+  | { type: "session.idle"; properties: { sessionID: string } }
+  | { type: "session.error"; properties: { sessionID: string; error: StructuredError } }
+  | { type: "message.updated"; properties: { info: Message } }
+  | { type: "message.patched"; properties: { sessionID: string; messageID: string; patch: MessagePatch } }
+  | { type: "message.removed"; properties: { sessionID: string; messageID: string } }
+  | { type: "message.part.updated"; properties: { sessionID: string; part: Part } }
+  | { type: "message.part.delta"; properties: { sessionID: string; messageID: string; partID: string; field: "text" | "raw"; delta: string } }
+  | { type: "message.tool.transition"; properties: { sessionID: string; messageID: string; partID: string; transition: ToolTransition } }
+  | { type: "message.parts.replaced"; properties: { sessionID: string; messageID: string; parts: Part[] } }
+  | { type: "permission.asked"; properties: PermissionRequest }
+  | { type: "permission.replied"; properties: { sessionID: string; requestID: string } }
+  | { type: "form.created"; properties: { form: FormRequest } }
+  | { type: "form.settled"; properties: { sessionID: string; formID: string } }
+  | { type: "vcs.branch.updated"; properties: { branch?: string } }
+  | { type: "mcp.status.changed"; properties: { server: string } }
+  | { type: "catalog.updated"; properties: { kind: CatalogKind } }
+  // OpenChamber's own server frames that ride the same stream.
+  | { type: "openchamber.notification"; properties: OpenchamberNotification }
+  | { type: "openchamber.permission-auto-accept"; properties: { sessions: Record<string, boolean>; revision?: number } }
+
+/** Agent-completion / restart notices the OpenChamber server publishes for non-web runtimes. */
+export type OpenchamberNotification = {
+  kind?: string
+  sessionId?: string
+  directory?: string
+  title?: string
+  body?: string
+  tag?: string
+  requireHidden?: boolean
+  desktopNotificationDelivered?: boolean
+  desktopStdoutActive?: boolean
+}
+
+export type SyncEventType = SyncEvent["type"]
+
+/** A translated event together with the directory it belongs to. */
+export type RoutedSyncEvent = {
+  directory: string
+  event: SyncEvent
+}
+
+export const GLOBAL_EVENT_DIRECTORY = "global"
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const ZERO_TOKENS: TokenUsageInfo = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+
+/** Server events and the messages they create share one id space (`evt_` → `msg_`). */
+export const messageIdFromEvent = (eventID: string): string => eventID.replace(/^evt_/, "msg_")
+
+const eventDirectory = (event: OpenCodeEvent): string => event.location?.directory ?? GLOBAL_EVENT_DIRECTORY
+
+const sessionEvent = (sessionID: string, patch: SessionPatch): SyncEvent => ({
+  type: "session.patched",
+  properties: { sessionID, patch },
+})
+
+const messagePatch = (sessionID: string, messageID: string, patch: MessagePatch): SyncEvent => ({
+  type: "message.patched",
+  properties: { sessionID, messageID, patch },
+})
+
+const partUpdated = (sessionID: string, part: Part): SyncEvent => ({
+  type: "message.part.updated",
+  properties: { sessionID, part },
+})
+
+const toolTransition = (sessionID: string, messageID: string, callID: string, transition: ToolTransition): SyncEvent => ({
+  type: "message.tool.transition",
+  properties: { sessionID, messageID, partID: partIds.tool(callID), transition },
+})
+
+const finiteExit = (exit: number | "Infinity" | "-Infinity" | "NaN" | undefined): number | undefined =>
+  exit === "Infinity" || exit === "-Infinity" || exit === "NaN" ? undefined : exit
+
+// ---------------------------------------------------------------------------
+// Translation
+// ---------------------------------------------------------------------------
+
+/**
+ * Translates one wire event. Returns nothing for events the sync layer does
+ * not model (usage records, inbox delivery changes, TUI events, ...).
+ */
+export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
+  switch (event.type) {
+    case "server.connected":
+      return [{ type: "server.connected", properties: {} }]
+
+    case "installation.update-available":
+      return [{ type: "installation.update-available", properties: { version: event.data.version } }]
+
+    // --- sessions -----------------------------------------------------------
+
+    case "session.created": {
+      const info: Session = compact({
+        id: event.data.sessionID,
+        parentID: event.data.parentID,
+        projectID: event.data.projectID,
+        directory: event.data.location.directory,
+        workspaceID: event.data.location.workspaceID,
+        subpath: event.data.subpath,
+        title: event.data.title ?? "",
+        agent: event.data.agent,
+        model: event.data.model,
+        cost: 0,
+        tokens: ZERO_TOKENS,
+        time: { created: event.created, updated: event.created },
+        metadata: event.data.metadata,
+        permissions: event.data.permissions,
+      })
+      return [{ type: "session.created", properties: { info } }]
+    }
+    case "session.deleted":
+      return [{ type: "session.deleted", properties: { sessionID: event.data.sessionID } }]
+    case "session.renamed":
+      return [sessionEvent(event.data.sessionID, { title: event.data.title, time: { updated: event.created } })]
+    case "session.moved":
+      return [
+        sessionEvent(event.data.sessionID, {
+          directory: event.data.location.directory,
+          projectID: event.data.projectID,
+          subpath: event.data.subpath ?? null,
+          time: { updated: event.created },
+        }),
+        {
+          type: "message.updated",
+          properties: {
+            info: {
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "location-switched",
+              time: { created: event.created },
+              directory: event.data.location.directory,
+            },
+          },
+        },
+      ]
+    case "session.agent.selected":
+      return [
+        sessionEvent(event.data.sessionID, { agent: event.data.agent }),
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "agent-switched",
+              time: { created: event.created },
+              agent: event.data.agent,
+              previous: event.data.previous,
+            }),
+          },
+        },
+      ]
+    case "session.model.selected":
+      return [
+        sessionEvent(event.data.sessionID, { model: event.data.model }),
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "model-switched",
+              time: { created: event.created },
+              model: event.data.model,
+              previous: event.data.previous,
+            }),
+          },
+        },
+      ]
+    case "session.usage.updated":
+      return [sessionEvent(event.data.sessionID, { cost: event.data.cost, tokens: event.data.tokens, time: { updated: event.created } })]
+    case "session.permissions.updated":
+      return [sessionEvent(event.data.sessionID, { permissions: event.data.permissions })]
+    case "session.viewed":
+      return [sessionEvent(event.data.sessionID, { time: { viewed: event.created } })]
+    case "session.revert.staged":
+      return [sessionEvent(event.data.sessionID, { revert: event.data.revert })]
+    case "session.revert.cleared":
+    case "session.revert.committed":
+      return [sessionEvent(event.data.sessionID, { revert: null })]
+
+    // --- live status --------------------------------------------------------
+
+    case "session.status":
+      return [{ type: "session.status", properties: { sessionID: event.data.sessionID, status: event.data.status } }]
+    case "session.idle":
+      return [{ type: "session.idle", properties: { sessionID: event.data.sessionID } }]
+    case "session.execution.started":
+      return [{ type: "session.status", properties: { sessionID: event.data.sessionID, status: { type: "busy" } } }]
+    case "session.execution.succeeded":
+      return [
+        sessionEvent(event.data.sessionID, { outcome: "succeeded", time: { idle: event.created, updated: event.created } }),
+        { type: "session.idle", properties: { sessionID: event.data.sessionID } },
+      ]
+    case "session.execution.interrupted":
+      return [
+        sessionEvent(event.data.sessionID, { outcome: "interrupted", time: { idle: event.created, updated: event.created } }),
+        { type: "session.idle", properties: { sessionID: event.data.sessionID } },
+      ]
+    case "session.execution.failed":
+      return [
+        sessionEvent(event.data.sessionID, { outcome: "failed", time: { idle: event.created, updated: event.created } }),
+        { type: "session.error", properties: { sessionID: event.data.sessionID, error: event.data.error } },
+      ]
+
+    // --- user input ---------------------------------------------------------
+
+    case "session.inbox.enqueued": {
+      const item = event.data.item
+      const messageID = event.data.inboxID
+      if (item.type === "user") {
+        return [
+          {
+            type: "message.updated",
+            properties: {
+              info: compact({
+                id: messageID,
+                sessionID: event.data.sessionID,
+                role: "user",
+                time: { created: event.created },
+                metadata: item.payload.metadata,
+              }),
+            },
+          },
+          {
+            type: "message.parts.replaced",
+            properties: {
+              sessionID: event.data.sessionID,
+              messageID,
+              parts: projectUserParts(item.payload, { sessionID: event.data.sessionID, messageID, created: event.created }),
+            },
+          },
+        ]
+      }
+      if (item.type === "synthetic") {
+        return [
+          {
+            type: "message.updated",
+            properties: {
+              info: compact({
+                id: messageID,
+                sessionID: event.data.sessionID,
+                role: "synthetic",
+                time: { created: event.created },
+                text: item.payload.text,
+                description: item.payload.description,
+                metadata: item.payload.metadata,
+              }),
+            },
+          },
+        ]
+      }
+      return []
+    }
+    case "session.inbox.delivered":
+      return [messagePatch(event.data.sessionID, event.data.inboxID, { time: { created: event.created } })]
+    case "session.inbox.cancelled":
+      return [{ type: "message.removed", properties: { sessionID: event.data.sessionID, messageID: event.data.inboxID } }]
+    case "session.synthetic":
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "synthetic",
+              time: { created: event.created },
+              text: event.data.text,
+              description: event.data.description,
+            }),
+          },
+        },
+      ]
+    case "session.instructions.updated": {
+      if (event.data.text === undefined) return []
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: {
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "system",
+              time: { created: event.created },
+              text: event.data.text,
+              description: `Instructions updated: ${Object.keys(event.data.delta ?? {}).join(", ")}`,
+            },
+          },
+        },
+      ]
+    }
+
+    // --- assistant steps ----------------------------------------------------
+
+    case "session.step.started":
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: event.data.assistantMessageID,
+              sessionID: event.data.sessionID,
+              role: "assistant",
+              time: { created: event.created },
+              agent: event.data.agent,
+              providerID: event.data.model.providerID,
+              modelID: event.data.model.id,
+              variant: event.data.model.variant,
+              snapshot: event.data.snapshot ? { start: event.data.snapshot } : undefined,
+            }),
+          },
+        },
+      ]
+    case "session.step.streamed":
+      return [messagePatch(event.data.sessionID, event.data.assistantMessageID, { time: { streamed: event.created } })]
+    case "session.step.ended":
+      return [
+        messagePatch(
+          event.data.sessionID,
+          event.data.assistantMessageID,
+          compact({
+            time: { completed: event.created },
+            finish: event.data.finish,
+            cost: event.data.cost,
+            tokens: event.data.tokens,
+            snapshot: event.data.snapshot ? { end: event.data.snapshot, files: event.data.files } : undefined,
+            retry: null,
+          }),
+        ),
+      ]
+    case "session.step.failed":
+      return [
+        messagePatch(
+          event.data.sessionID,
+          event.data.assistantMessageID,
+          compact({
+            time: { completed: event.created },
+            finish: event.data.finish ?? "error",
+            error: event.data.error,
+            cost: event.data.cost,
+            tokens: event.data.tokens,
+            retry: null,
+          }),
+        ),
+      ]
+    case "session.retry.scheduled":
+      return [
+        messagePatch(event.data.sessionID, event.data.assistantMessageID, {
+          retry: { attempt: event.data.attempt, at: event.data.at, error: event.data.error },
+        }),
+      ]
+    // --- text and reasoning -------------------------------------------------
+
+    case "session.text.started":
+      return [
+        partUpdated(event.data.sessionID, {
+          id: partIds.text(event.data.assistantMessageID, event.data.ordinal),
+          sessionID: event.data.sessionID,
+          messageID: event.data.assistantMessageID,
+          type: "text",
+          text: "",
+          time: { start: event.created },
+        }),
+      ]
+    case "session.text.delta":
+      return [
+        {
+          type: "message.part.delta",
+          properties: {
+            sessionID: event.data.sessionID,
+            messageID: event.data.assistantMessageID,
+            partID: partIds.text(event.data.assistantMessageID, event.data.ordinal),
+            field: "text",
+            delta: event.data.delta,
+          },
+        },
+      ]
+    case "session.text.ended":
+      return [
+        partUpdated(event.data.sessionID, {
+          id: partIds.text(event.data.assistantMessageID, event.data.ordinal),
+          sessionID: event.data.sessionID,
+          messageID: event.data.assistantMessageID,
+          type: "text",
+          text: event.data.text,
+          time: { start: event.created, end: event.created },
+        }),
+      ]
+    case "session.reasoning.started":
+      return [
+        partUpdated(event.data.sessionID, {
+          id: partIds.reasoning(event.data.assistantMessageID, event.data.ordinal),
+          sessionID: event.data.sessionID,
+          messageID: event.data.assistantMessageID,
+          type: "reasoning",
+          text: "",
+          time: { start: event.created },
+        }),
+      ]
+    case "session.reasoning.delta":
+      return [
+        {
+          type: "message.part.delta",
+          properties: {
+            sessionID: event.data.sessionID,
+            messageID: event.data.assistantMessageID,
+            partID: partIds.reasoning(event.data.assistantMessageID, event.data.ordinal),
+            field: "text",
+            delta: event.data.delta,
+          },
+        },
+      ]
+    case "session.reasoning.ended":
+      return [
+        partUpdated(event.data.sessionID, {
+          id: partIds.reasoning(event.data.assistantMessageID, event.data.ordinal),
+          sessionID: event.data.sessionID,
+          messageID: event.data.assistantMessageID,
+          type: "reasoning",
+          text: event.data.text,
+          time: { start: event.created, end: event.created },
+        }),
+      ]
+
+    // --- tool calls ---------------------------------------------------------
+
+    case "session.tool.input.started":
+      return [
+        partUpdated(event.data.sessionID, {
+          id: partIds.tool(event.data.id),
+          sessionID: event.data.sessionID,
+          messageID: event.data.assistantMessageID,
+          type: "tool",
+          callID: event.data.id,
+          tool: event.data.name,
+          state: { status: "pending", input: {}, raw: "" },
+        }),
+      ]
+    case "session.tool.input.delta":
+      return [
+        {
+          type: "message.part.delta",
+          properties: {
+            sessionID: event.data.sessionID,
+            messageID: event.data.assistantMessageID,
+            partID: partIds.tool(event.data.id),
+            field: "raw",
+            delta: event.data.delta,
+          },
+        },
+      ]
+    case "session.tool.input.ended":
+      return [toolTransition(event.data.sessionID, event.data.assistantMessageID, event.data.id, { kind: "input", raw: event.data.text })]
+    case "session.tool.called":
+      return [
+        toolTransition(event.data.sessionID, event.data.assistantMessageID, event.data.id, {
+          kind: "called",
+          input: event.data.input,
+          executed: event.data.executed,
+          start: event.created,
+        }),
+      ]
+    case "session.tool.progress":
+      return [toolTransition(event.data.sessionID, event.data.assistantMessageID, event.data.id, { kind: "progress", metadata: event.data.metadata })]
+    case "session.tool.success":
+      return [
+        toolTransition(
+          event.data.sessionID,
+          event.data.assistantMessageID,
+          event.data.id,
+          compact({
+            kind: "success",
+            output: toolOutputText(event.data.content),
+            attachments: toolAttachments(event.data.content, {
+              sessionID: event.data.sessionID,
+              messageID: event.data.assistantMessageID,
+              callID: event.data.id,
+            }),
+            metadata: event.data.metadata,
+            executed: event.data.executed,
+            end: event.created,
+          }),
+        ),
+      ]
+    case "session.tool.failed":
+      return [
+        toolTransition(
+          event.data.sessionID,
+          event.data.assistantMessageID,
+          event.data.id,
+          compact({
+            kind: "failed",
+            error: structuredErrorText(event.data.error),
+            output: toolOutputText(event.data.content) || undefined,
+            metadata: event.data.metadata,
+            executed: event.data.executed,
+            end: event.created,
+          }),
+        ),
+      ]
+
+    // --- shell and compaction -------------------------------------------------
+
+    case "session.shell.started":
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "shell",
+              time: { created: event.created },
+              shellID: event.data.shell.id,
+              command: event.data.shell.command,
+              status: event.data.shell.status,
+              exit: finiteExit(event.data.shell.exit),
+            }),
+          },
+        },
+      ]
+    case "session.shell.ended":
+      // The shell message id is derived from the started event, which we
+      // cannot recover here; the reducer matches shell messages by shellID.
+      return [
+        {
+          type: "message.patched",
+          properties: {
+            sessionID: event.data.sessionID,
+            messageID: `shell:${event.data.shell.id}`,
+            patch: {
+              time: { completed: event.created },
+              shell: compact({ status: event.data.shell.status, exit: finiteExit(event.data.shell.exit), output: event.data.output }),
+            },
+          },
+        },
+      ]
+    case "session.compaction.started":
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: {
+              id: event.data.inputID ?? messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "compaction",
+              time: { created: event.created },
+              status: "running",
+              reason: event.data.reason,
+              summary: "",
+            },
+          },
+        },
+      ]
+    case "session.compaction.ended":
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "compaction",
+              time: { created: event.created },
+              status: "completed",
+              reason: event.data.reason,
+              summary: event.data.text,
+              cost: event.data.cost,
+              tokens: event.data.tokens,
+            }),
+          },
+        },
+      ]
+    case "session.compaction.failed":
+      return [
+        {
+          type: "message.updated",
+          properties: {
+            info: compact({
+              id: event.data.inputID ?? messageIdFromEvent(event.id),
+              sessionID: event.data.sessionID,
+              role: "compaction",
+              time: { created: event.created },
+              status: "failed",
+              reason: event.data.reason,
+              summary: "",
+              error: event.data.error,
+              cost: event.data.cost,
+              tokens: event.data.tokens,
+            }),
+          },
+        },
+      ]
+
+    // --- requests to the user -------------------------------------------------
+
+    case "permission.asked":
+      return [{ type: "permission.asked", properties: compact({ ...event.data }) }]
+    case "permission.replied":
+      return [{ type: "permission.replied", properties: { sessionID: event.data.sessionID, requestID: event.data.requestID } }]
+    case "form.created":
+      return [{ type: "form.created", properties: { form: event.data.form } }]
+    case "form.replied":
+    case "form.cancelled":
+      return [{ type: "form.settled", properties: { sessionID: event.data.sessionID, formID: event.data.id } }]
+
+    // --- location-level notices ------------------------------------------------
+
+    case "vcs.branch.updated":
+      return [{ type: "vcs.branch.updated", properties: compact({ branch: event.data.branch }) }]
+    case "mcp.status.changed":
+      return [{ type: "mcp.status.changed", properties: { server: event.data.server } }]
+    case "config.updated":
+      return [{ type: "catalog.updated", properties: { kind: "config" } }]
+    case "agent.updated":
+      return [{ type: "catalog.updated", properties: { kind: "agent" } }]
+    case "command.updated":
+      return [{ type: "catalog.updated", properties: { kind: "command" } }]
+    case "skill.updated":
+      return [{ type: "catalog.updated", properties: { kind: "skill" } }]
+    case "plugin.updated":
+      return [{ type: "catalog.updated", properties: { kind: "plugin" } }]
+    case "catalog.updated":
+      return [{ type: "catalog.updated", properties: { kind: "model" } }]
+    case "credential.updated":
+    case "credential.switched":
+      return [{ type: "catalog.updated", properties: { kind: "credential" } }]
+    case "project.updated":
+      return [{ type: "catalog.updated", properties: { kind: "project" } }]
+
+    default:
+      return []
+  }
+}
+
+/** Translates a wire event and tags every resulting sync event with its directory. */
+export function routeWireEvent(event: OpenCodeEvent): RoutedSyncEvent[] {
+  const directory = eventDirectory(event)
+  return translateWireEvent(event).map((translated) => ({ directory, event: translated }))
+}
+
+/** Session an event addresses, when it addresses one. */
+export function syncEventSessionID(event: SyncEvent): string | undefined {
+  switch (event.type) {
+    case "session.created":
+      return event.properties.info.id
+    case "message.updated":
+      return event.properties.info.sessionID
+    case "permission.asked":
+      return event.properties.sessionID
+    case "form.created":
+      return event.properties.form.sessionID
+    case "session.patched":
+    case "session.deleted":
+    case "session.status":
+    case "session.idle":
+    case "session.error":
+    case "message.patched":
+    case "message.removed":
+    case "message.part.updated":
+    case "message.part.delta":
+    case "message.tool.transition":
+    case "message.parts.replaced":
+    case "permission.replied":
+    case "form.settled":
+      return event.properties.sessionID
+    default:
+      return undefined
+  }
+}
+
+/** Message an event addresses, when it addresses one. */
+export function syncEventMessageID(event: SyncEvent): string | undefined {
+  switch (event.type) {
+    case "message.updated":
+      return event.properties.info.id
+    case "message.part.updated":
+      return event.properties.part.messageID
+    case "message.patched":
+    case "message.removed":
+    case "message.part.delta":
+    case "message.tool.transition":
+    case "message.parts.replaced":
+      return event.properties.messageID
+    default:
+      return undefined
+  }
+}

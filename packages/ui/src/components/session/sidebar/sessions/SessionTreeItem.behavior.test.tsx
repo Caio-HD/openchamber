@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import type { SessionNodeItemProps } from './SessionNodeItem';
 import type { SessionTreeItemProps } from './SessionTreeItem';
 import { installHookTestDom } from '../test-utils/testDom';
@@ -47,10 +47,10 @@ const noopStartSessionWorktreeMenuLoad: SessionTreeItemProps['startSessionWorktr
 
 const session = (id: string): Session => ({
   id,
-  slug: id,
   projectID: 'project',
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   title: 'Shared title',
-  version: '1',
   directory: '/workspace',
   time: { created: 1, updated: 1 },
 });
@@ -67,7 +67,6 @@ describe('SessionTreeItem public behavior', () => {
       const [editingId, setEditingId] = React.useState<string | null>(null);
       const [editTitle, setEditTitle] = React.useState('');
       const [menuKey, setMenuKey] = React.useState<string | null>(null);
-      const [copiedSessionId, setCopiedSessionId] = React.useState<string | null>(null);
       const rows = [
         { renderContext: 'project' as const, groupDirectory: '/workspace' },
         { renderContext: 'recent' as const, groupDirectory: '/workspace' },
@@ -85,7 +84,6 @@ describe('SessionTreeItem public behavior', () => {
         editTitle={editTitle}
         setEditTitle={setEditTitle}
         toggleParent={noop}
-        copiedSessionId={copiedSessionId}
         openSidebarMenuKey={menuKey}
         setOpenSidebarMenuKey={setMenuKey}
         allowReselect={false}
@@ -96,7 +94,6 @@ describe('SessionTreeItem public behavior', () => {
         deleteSessionConfirm={null}
         setDeleteSessionConfirm={noop}
         startFolderRename={noop}
-        setCopiedSessionId={setCopiedSessionId}
         startSessionWorktreeMenuLoad={noopStartSessionWorktreeMenuLoad}
         mobileVariant={false}
         alwaysShowActions={false}

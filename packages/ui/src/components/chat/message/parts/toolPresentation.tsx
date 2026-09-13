@@ -5,7 +5,7 @@ export const getToolIcon = (toolName: string) => {
     const iconClass = 'h-3.5 w-3.5 flex-shrink-0';
     const tool = toolName.toLowerCase();
 
-    if (tool === 'edit' || tool === 'multiedit' || tool === 'apply_patch' || tool === 'str_replace' || tool === 'str_replace_based_edit_tool') {
+    if (tool === 'edit' || tool === 'patch' || tool === 'str_replace' || tool === 'str_replace_based_edit_tool') {
         return <Icon name="pencil" className={iconClass} />;
     }
     if (tool === 'write' || tool === 'create' || tool === 'file_write') {
@@ -14,10 +14,10 @@ export const getToolIcon = (toolName: string) => {
     if (tool === 'read' || tool === 'view' || tool === 'file_read' || tool === 'cat') {
         return <Icon name="file-text" className={iconClass} />;
     }
-    if (tool === 'bash' || tool === 'shell' || tool === 'cmd' || tool === 'terminal') {
+    if (tool === 'shell' || tool === 'bash' || tool === 'cmd' || tool === 'terminal') {
         return <Icon name="terminal-box" className={iconClass} />;
     }
-    if (tool === 'list' || tool === 'ls' || tool === 'dir' || tool === 'list_files') {
+    if (tool === 'ls' || tool === 'dir' || tool === 'list_files') {
         return <Icon name="folder-6" className={iconClass} />;
     }
     if (tool === 'search' || tool === 'grep' || tool === 'find' || tool === 'ripgrep') {
@@ -41,16 +41,13 @@ export const getToolIcon = (toolName: string) => {
     ) {
         return <Icon name="global" className={iconClass} />;
     }
-    if (tool === 'todowrite' || tool === 'todoread') {
-        return <Icon name="list-check-3" className={iconClass} />;
-    }
     if (tool === 'structuredoutput' || tool === 'structured_output') {
         return <Icon name="list-check-2" className={iconClass} />;
     }
     if (tool === 'skill') {
         return <Icon name="book" className={iconClass} />;
     }
-    if (tool === 'task') {
+    if (tool === 'subagent') {
         return <Icon name="ai-agent" className={iconClass} />;
     }
     if (tool === 'openchamber') {
@@ -70,9 +67,6 @@ export const getToolIcon = (toolName: string) => {
     }
     if (tool === 'question') {
         return <Icon name="survey" className={iconClass} />;
-    }
-    if (tool === 'lsp') {
-        return <Icon name="scan-2" className={iconClass} />;
     }
     if (tool === 'plan_enter') {
         return <Icon name="file-list-2" className={iconClass} />;

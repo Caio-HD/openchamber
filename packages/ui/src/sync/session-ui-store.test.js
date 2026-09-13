@@ -292,7 +292,7 @@ describe('sendMessage captured target', () => {
       ensureChild: () => childStore,
       getChild: () => childStore,
     };
-    setActionRefs(opencodeClient, childStores, () => '/current/project');
+    setActionRefs(childStores, () => '/current/project');
     setOptimisticRefs(() => {}, () => {});
     useConfigStore.setState({ isConnected: true });
     useSessionUIStore.setState({
@@ -810,7 +810,7 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
       ensureChild: () => childStore,
       getChild: () => childStore,
     };
-    setActionRefs(opencodeClient, childStores, () => '/projects/alpha');
+    setActionRefs(childStores, () => '/projects/alpha');
     setOptimisticRefs(() => {}, () => {});
     useConfigStore.setState({ isConnected: true });
 
@@ -944,7 +944,7 @@ describe('routeMessage skill invocation', () => {
       ensureChild: () => childStore,
       getChild: () => childStore,
     };
-    setActionRefs(opencodeClient, childStores, () => '/skills/project');
+    setActionRefs(childStores, () => '/skills/project');
     setOptimisticRefs(() => {}, () => {});
     useConfigStore.setState({ isConnected: true });
 
@@ -1033,12 +1033,11 @@ describe('routeMessage skill invocation', () => {
 
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].additionalParts[0]).toEqual(additionalParts[0]);
-    expect(sendMessageCalls[0].additionalParts[1]).toMatchObject({ synthetic: true });
-    expect(sendMessageCalls[0].additionalParts[1].text).toContain('grill-with-docs skill');
+    expect(sendMessageCalls[0].context[0]).toEqual({ text: additionalParts[0].text, metadata: additionalParts[0].metadata });
+    expect(sendMessageCalls[0].context[1].text).toContain('grill-with-docs skill');
   });
 
-  test('expands a contextual command template on the prompt route', async () => {
+  test('keeps a contextual command invocation as typed on the prompt route', async () => {
     useCommandsStore.setState({
       commands: [{ name: 'inspect', template: 'Inspect $ARGUMENTS carefully.' }],
     });
@@ -1063,8 +1062,10 @@ describe('routeMessage skill invocation', () => {
 
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].text).toBe('Inspect auth flow carefully.');
-    expect(sendMessageCalls[0].additionalParts[0].metadata.openchamberContext.kind).toBe('code-comment');
+    // OpenCode 2.x does not expose command templates over HTTP; the server
+    // expands the invocation, so the prompt travels as typed.
+    expect(sendMessageCalls[0].text).toBe('/inspect auth flow');
+    expect(sendMessageCalls[0].context[0].metadata.openchamberContext.kind).toBe('code-comment');
   });
 
   test('keeps session.command when the only extra part is pinned knowledge', async () => {
@@ -1133,7 +1134,7 @@ describe('routeMessage skill invocation', () => {
     expect(route).toBe('prompt');
     expect(sendCommandCalls).toHaveLength(0);
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].additionalParts[0]).toEqual(instructions[0]);
+    expect(sendMessageCalls[0].context[0].text).toBe(instructions[0].text);
   });
 
   test('sends an unknown slash token as a plain message', async () => {
@@ -1250,7 +1251,7 @@ describe('sendMessage effort record', () => {
       ensureChild: () => childStore,
       getChild: () => childStore,
     };
-    setActionRefs(opencodeClient, childStores, () => '/current/project');
+    setActionRefs(childStores, () => '/current/project');
     setOptimisticRefs(() => {}, () => {});
     useConfigStore.setState({
       isConnected: true,
@@ -1321,7 +1322,7 @@ describe('missing session directory recovery', () => {
   const probes = [];
   let availability = 'missing';
   let originalGetDirectoryAvailability;
-  let originalGetSdkClient;
+  let originalMoveSession;
   let originalProjects;
   let originalActiveProjectId;
   let originalDirectoryState;
@@ -1348,7 +1349,7 @@ describe('missing session directory recovery', () => {
     probes.length = 0;
     availability = 'missing';
     originalGetDirectoryAvailability = opencodeClient.getDirectoryAvailability;
-    originalGetSdkClient = opencodeClient.getSdkClient;
+    originalMoveSession = opencodeClient.moveSession;
     originalProjects = useProjectsStore.getState().projects;
     originalActiveProjectId = useProjectsStore.getState().activeProjectId;
     originalDirectoryState = useDirectoryStore.getState();
@@ -1360,14 +1361,11 @@ describe('missing session directory recovery', () => {
       setState: () => {},
     };
     const childStores = { children: new Map(), ensureChild: () => childStore, getChild: () => childStore };
-    setActionRefs({
-      project: { list: async () => ({ data: [{ id: 'project-main', worktree: projectDirectory }] }) },
-      session: { messages: async () => ({ data: [] }) },
-    }, childStores, () => projectDirectory);
+    setActionRefs(childStores, () => projectDirectory);
     setOptimisticRefs(() => {}, () => {});
-    opencodeClient.getSdkClient = () => ({
-      experimental: { controlPlane: { moveSession: async (params) => { moves.push(params); return {}; } } },
-    });
+    opencodeClient.moveSession = async (sessionID, directory) => {
+      moves.push({ sessionID, directory });
+    };
     opencodeClient.getDirectoryAvailability = async (directory) => {
       probes.push(directory);
       return availability;
@@ -1386,7 +1384,7 @@ describe('missing session directory recovery', () => {
 
   afterEach(() => {
     opencodeClient.getDirectoryAvailability = originalGetDirectoryAvailability;
-    opencodeClient.getSdkClient = originalGetSdkClient;
+    opencodeClient.moveSession = originalMoveSession;
     useProjectsStore.setState({ projects: originalProjects, activeProjectId: originalActiveProjectId });
     useDirectoryStore.setState(originalDirectoryState, true);
     useGlobalSessionsStore.setState(originalGlobalState, true);

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session, SessionStatus } from '@/lib/opencode/model';
 import { canUseElectronDesktopIPC, invokeDesktop, isDesktopLocalOriginActive } from '@/lib/desktop';
 import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { desktopHostsGet, getDesktopHostApiUrl, locationMatchesHost, redactSensitiveUrl } from '@/lib/desktopHosts';
@@ -24,8 +24,7 @@ import { resolveProjectForSessionDirectory, normalizeProjectPath } from '@/lib/p
 import type { ProjectEntry } from '@/lib/api/types';
 import type { WorktreeMetadata } from '@/types/worktree';
 import { toast } from '@/components/ui';
-import type { PermissionRequest } from '@/types/permission';
-import type { QuestionRequest } from '@/types/question';
+import type { FormRequest, PermissionRequest } from '@/lib/opencode/model';
 
 // Native tray/menu bar bridge. The Electron main process owns the Tray UI; this hook
 // streams a compact snapshot of live session/approval state to it via the
@@ -55,7 +54,7 @@ type TraySession = {
 };
 
 type TrayApproval = {
-  kind: 'permission' | 'question';
+  kind: 'permission' | 'form';
   id: string;
   sessionId: string;
   sessionTitle: string;
@@ -105,15 +104,12 @@ const isTrayEnabled = (): boolean =>
   typeof window !== 'undefined' && window.__OPENCHAMBER_ELECTRON__?.trayEnabled !== false;
 
 const permissionLabel = (request: PermissionRequest): string => {
-  const head = typeof request.permission === 'string' ? request.permission : 'Permission';
-  const pattern = Array.isArray(request.patterns) ? request.patterns.find((p) => typeof p === 'string' && p.trim()) : '';
-  return pattern ? `${head}: ${pattern}` : head;
+  const head = request.action.trim() || 'Permission';
+  const resource = request.resources.find((item) => item.trim());
+  return resource ? `${head}: ${resource}` : head;
 };
 
-const questionLabel = (request: QuestionRequest): string => {
-  const first = Array.isArray(request.questions) ? request.questions[0] : undefined;
-  return first?.header || first?.question || 'Question';
-};
+const formLabel = (request: FormRequest): string => request.title.trim() || 'Question';
 
 const compareSessionOrder = (left: Session, right: Session): number => (
   compareSessionsByLifecycleOrder(
@@ -269,11 +265,11 @@ const collectLiveData = (): LiveData => {
         approvals.push({ kind: 'permission', id: request.id, sessionId: sid, sessionTitle: '', label: permissionLabel(request), directory });
       }
     }
-    for (const [sessionId, requests] of Object.entries(state.question ?? {})) {
+    for (const [sessionId, requests] of Object.entries(state.form ?? {})) {
       for (const request of requests ?? []) {
         if (!request?.id) continue;
         const sid = request.sessionID || sessionId;
-        approvals.push({ kind: 'question', id: request.id, sessionId: sid, sessionTitle: '', label: questionLabel(request), directory });
+        approvals.push({ kind: 'form', id: request.id, sessionId: sid, sessionTitle: '', label: formLabel(request), directory });
       }
     }
   }
@@ -452,13 +448,20 @@ export const useTraySync = (): void => {
     // Cheap: ~ms per directory, bounded by the tray's visible session count.
     const refreshGlobalStatus = async () => {
       const targets = collectStatusPollDirectories();
-      await Promise.all([...targets.entries()].map(async ([directory, sessionIds]) => {
-        // null = fetch failed → keep that directory's current entries;
-        // {} = authoritative "everything here is idle".
-        const raw = await opencodeClient.getSessionStatusForDirectory(directory).catch(() => null);
-        if (disposed || raw === null) return;
-        applyGlobalSessionStatusSnapshot(directory, raw, sessionIds);
-      }));
+      // OpenCode v2 reports active sessions globally, not per directory, so one
+      // fetch covers every tracked directory.
+      // null = fetch failed → keep every directory's current entries;
+      // a map without a session means that session is authoritatively idle.
+      const active = await opencodeClient.getActiveSessionStatuses();
+      if (disposed || active === null) return;
+      for (const [directory, sessionIds] of targets.entries()) {
+        const scoped: Record<string, SessionStatus> = {};
+        for (const sessionId of sessionIds) {
+          const status = active[sessionId];
+          if (status) scoped[sessionId] = status;
+        }
+        applyGlobalSessionStatusSnapshot(directory, scoped, sessionIds);
+      }
     };
 
     // Coalesce bursts (e.g. token-by-token streaming updates a store rapidly)

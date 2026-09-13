@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGlobalMessageStreamHub } from './global-hub.js';
 
 it('bounds a contiguous replay suffix by UTF-8 bytes and event count', async () => {
-  const blocks = Array.from({ length: 8 }, (_, i) => `id: e${i}\ndata: ${JSON.stringify({ type: 'message', properties: { text: '界'.repeat(40) } })}\n\n`);
+  // v2 carries the event id inside the payload; there are no `id:` SSE lines.
+  const blocks = Array.from({ length: 8 }, (_, i) => `data: ${JSON.stringify({ id: `e${i}`, type: 'message', properties: { text: '界'.repeat(40) } })}\n\n`);
   const received = [];
   const hub = createGlobalMessageStreamHub({
     buildOpenCodeUrl: path => `http://127.0.0.1:4096${path}`,
-    getOpenCodeAuthHeaders: () => ({}), replayLimit: 3, replayByteLimit: 550,
+    getOpenCodeAuthHeaders: () => ({}), replayLimit: 3, replayByteLimit: 600,
     upstreamReconnectDelayMs: 60_000,
     fetchImpl: async () => createSseResponse({ blocks }),
   });
@@ -19,8 +20,8 @@ it('bounds a contiguous replay suffix by UTF-8 bytes and event count', async () 
     expect(hub.replayAfter('e5')).toBeNull();
     const tail = hub.replayAfter('e6');
     expect(tail.map(entry => entry.eventId)).toEqual(['e7']);
-    expect(Buffer.byteLength(tail[0].serializedFrame) * 2).toBeLessThanOrEqual(550);
-    expect(Buffer.byteLength(tail[0].serializedFrame) * 3).toBeGreaterThan(550);
+    expect(Buffer.byteLength(tail[0].serializedFrame) * 2).toBeLessThanOrEqual(600);
+    expect(Buffer.byteLength(tail[0].serializedFrame) * 3).toBeGreaterThan(600);
   } finally { hub.stop(); }
 });
 
@@ -72,7 +73,7 @@ describe('createGlobalMessageStreamHub', () => {
       upstreamReconnectDelayMs: 100,
       fetchImpl: async () => createSseResponse({
         blocks: [
-          'id: evt-1\ndata: {"type":"session.updated","properties":{}}\n\n',
+          'data: {"id":"evt-1","type":"session.updated","properties":{}}\n\n',
         ],
       }),
     });
@@ -134,7 +135,7 @@ describe('createGlobalMessageStreamHub', () => {
       upstreamReconnectDelayMs: 100,
       fetchImpl: async () => createSseResponse({
         blocks: [
-          'id: evt-1\ndata: {"type":"session.updated","properties":{}}\n\n',
+          'data: {"id":"evt-1","type":"session.updated","properties":{}}\n\n',
         ],
       }),
     });

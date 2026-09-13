@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import { useI18n } from '@/lib/i18n';
 import { formatDirectoryName } from '@/lib/utils';
 import type { WorktreeMetadata } from '@/types/worktree';
@@ -26,7 +26,6 @@ type Props = {
   notifyOnSubtasks: boolean;
   editingId: string | null;
   editTitle: string;
-  copiedSessionId: string | null;
   openSidebarMenuKey: string | null;
   mobileVariant: boolean;
   alwaysShowActions: boolean;
@@ -48,7 +47,6 @@ type Props = {
   | 'deleteSessionConfirm'
   | 'setDeleteSessionConfirm'
   | 'startFolderRename'
-  | 'setCopiedSessionId'
   | 'startSessionWorktreeMenuLoad'
 >;
 
@@ -143,7 +141,6 @@ export const RecentSessionSection: React.FC<Props> = (props) => {
       notifyOnSubtasks={props.notifyOnSubtasks}
       editingId={props.editingId}
       editTitle={props.editTitle}
-      copiedSessionId={props.copiedSessionId}
       openSidebarMenuKey={props.openSidebarMenuKey}
       mobileVariant={props.mobileVariant}
       alwaysShowActions={props.alwaysShowActions}
@@ -162,7 +159,6 @@ export const RecentSessionSection: React.FC<Props> = (props) => {
       deleteSessionConfirm={props.deleteSessionConfirm}
       setDeleteSessionConfirm={props.setDeleteSessionConfirm}
       startFolderRename={props.startFolderRename}
-      setCopiedSessionId={props.setCopiedSessionId}
       startSessionWorktreeMenuLoad={props.startSessionWorktreeMenuLoad}
     />
   );

@@ -1,24 +1,25 @@
 import { describe, expect, test } from 'bun:test'
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createOpencodeClient } from '@opencode-ai/sdk/v2'
+import { OpenCode } from '@opencode/client'
 import { SyncProvider, useSyncDirectory } from './sync-context'
 import { usePrefetchSessionMessages } from './use-sync'
 import { installHookTestDom } from '../components/session/sidebar/test-utils/testDom'
 
-const createSdk = () => createOpencodeClient({
+// The provider's own data access goes through the `opencodeClient` singleton;
+// this client only satisfies the prop and absorbs the event stream, so the
+// assertion below measures render boundaries and nothing else.
+const createSdk = () => OpenCode.make({
   baseUrl: 'https://sync.test',
   fetch: async (request) => {
     const path = new URL(request instanceof Request ? request.url : request.toString()).pathname
-    if (path.endsWith('/global/event')) {
+    if (path.endsWith('/event')) {
       return new Response(new ReadableStream(), { headers: { 'content-type': 'text/event-stream' } })
     }
-    const body = path.endsWith('/path')
-      ? { state: '', config: '', worktree: '/workspace', directory: '/workspace', home: '/home' }
-      : path.endsWith('/project') ? []
-      : path.endsWith('/project/current') ? { id: 'project' }
-      : path.endsWith('/session/status') ? {}
-      : []
+    const body = path.endsWith('/location')
+      ? { directory: '/workspace', project: { id: 'project', directory: '/workspace', canonical: '/workspace' } }
+      : path.endsWith('/session/active') ? {}
+      : { data: [] }
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
   },
 })

@@ -1,13 +1,18 @@
 import React from 'react';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { toast } from '@/components/ui';
 import { Icon } from '@/components/icon/Icon';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
 import { SettingsSection } from '@/components/sections/shared/SettingsSection';
+import {
+  useAutosave,
+  AUTOSAVE_SAVED,
+  AUTOSAVE_UNCHANGED,
+  autosaveFailed,
+  type AutosaveResult,
+} from '@/components/sections/shared/SettingsAutosave';
 import { RegistryBanner } from './RegistryBanner';
 import {
   usePluginsStore,
@@ -103,7 +108,6 @@ export const PluginsPage: React.FC = () => {
     [files, selectedId],
   );
 
-  const [isSaving, setIsSaving] = React.useState(false);
   const [isLoadingFile, setIsLoadingFile] = React.useState(false);
   const originalFileContentById = React.useRef(new Map<string, string>());
 
@@ -138,6 +142,51 @@ export const PluginsPage: React.FC = () => {
     };
   }, [selectedEntry, selectedFile, readFile, setDraft]);
 
+  // One routine for both shapes the page edits: a registry entry (spec +
+  // options) and a plugin file (its contents). Text fields commit on blur, so
+  // this runs with whatever the draft holds at that moment.
+  const save = React.useCallback(async (): Promise<AutosaveResult> => {
+    if (!draft) return AUTOSAVE_UNCHANGED;
+
+    if (selectedEntry && draft.mode === 'entry') {
+      const spec = draft.spec.trim();
+      const unchanged = spec === selectedEntry.spec
+        && draft.optionsJson.trim() === stringifyOptions(selectedEntry.options).trim();
+      if (unchanged) return AUTOSAVE_UNCHANGED;
+      if (!spec) return autosaveFailed(t('settings.plugins.validation.specRequired'));
+      const options = parseOptionsJson(draft.optionsJson);
+      if (!options.ok) return autosaveFailed(t('settings.plugins.page.field.options.invalidJson'));
+
+      const result = await updateEntry(selectedEntry.id, { spec, options: options.value });
+      if (!result.ok) {
+        return autosaveFailed(result.message || t('settings.plugins.toast.reloadFailed'));
+      }
+      if (result.reloadFailed) {
+        return autosaveFailed(result.warning || result.message || t('settings.plugins.toast.reloadFailed'));
+      }
+      return AUTOSAVE_SAVED;
+    }
+
+    if (selectedFile && draft.mode === 'file') {
+      const originalContent = originalFileContentById.current.get(selectedFile.id) ?? '';
+      if (draft.content === originalContent) return AUTOSAVE_UNCHANGED;
+
+      const result = await updateFile(selectedFile.id, { content: draft.content });
+      if (!result.ok) {
+        return autosaveFailed(result.message || t('settings.plugins.toast.reloadFailed'));
+      }
+      originalFileContentById.current.set(selectedFile.id, draft.content);
+      if (result.reloadFailed) {
+        return autosaveFailed(result.warning || result.message || t('settings.plugins.toast.reloadFailed'));
+      }
+      return AUTOSAVE_SAVED;
+    }
+
+    return AUTOSAVE_UNCHANGED;
+  }, [draft, selectedEntry, selectedFile, t, updateEntry, updateFile]);
+
+  const autosave = useAutosave(save);
+
   if (!selectedId) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -155,46 +204,6 @@ export const PluginsPage: React.FC = () => {
   if (selectedEntry && draft && draft.mode === 'entry') {
     const optionsResult = parseOptionsJson(draft.optionsJson);
     const optionsValid = optionsResult.ok;
-    const isDirty =
-      draft.spec !== selectedEntry.spec ||
-      draft.optionsJson !== stringifyOptions(selectedEntry.options);
-
-    const handleEntryDiscard = () => {
-      setDraft(buildEntryDraft(selectedEntry));
-    };
-
-    const handleEntrySave = async () => {
-      if (!optionsValid) return;
-      const spec = draft.spec.trim();
-      if (!spec) {
-        toast.error(t('settings.plugins.validation.specRequired'));
-        return;
-      }
-
-      setIsSaving(true);
-      try {
-        const result = await updateEntry(selectedEntry.id, {
-          spec,
-          options: optionsResult.value,
-        });
-        if (result.ok) {
-          if (result.reloadFailed) {
-            toast.warning(
-              result.message || t('settings.plugins.toast.reloadFailed'),
-              { description: result.warning },
-            );
-          } else if (result.restartDeferred) {
-            toast.success(t('settings.view.pendingRestart.saved'));
-          } else {
-            toast.success(result.message || t('settings.plugins.toast.updated'));
-          }
-        } else {
-          toast.error(result.message || t('settings.plugins.toast.reloadFailed'));
-        }
-      } finally {
-        setIsSaving(false);
-      }
-    };
 
     return (
       <SettingsPageLayout
@@ -209,7 +218,7 @@ export const PluginsPage: React.FC = () => {
             }
           />
         )}
-        showSaveStatus={false}
+        onBlurCapture={autosave.onBlurCapture}
       >
         <SettingsSection divider={false}>
           <RegistryBanner entryId={selectedEntry.id} spec={selectedEntry.spec} />
@@ -252,68 +261,12 @@ export const PluginsPage: React.FC = () => {
               {t('settings.plugins.page.field.options.invalidJson')}
             </p>
           )}
-          <div className="flex items-center gap-2 pt-3">
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => void handleEntrySave()}
-              disabled={!isDirty || !optionsValid || isSaving}
-            >
-              {t('settings.plugins.page.action.save')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleEntryDiscard}
-              disabled={!isDirty || isSaving}
-            >
-              {t('settings.plugins.page.action.discard')}
-            </Button>
-          </div>
         </SettingsSection>
       </SettingsPageLayout>
     );
   }
 
   if (selectedFile && draft && draft.mode === 'file') {
-    const originalContent = originalFileContentById.current.get(selectedFile.id) ?? '';
-    const isDirty = draft.content !== originalContent || draft.fileName !== selectedFile.fileName;
-
-    const handleFileDiscard = () => {
-      void (async () => {
-        setIsLoadingFile(true);
-        const result = await readFile(selectedFile.id);
-        const content = result?.content ?? '';
-        setIsLoadingFile(false);
-        originalFileContentById.current.set(selectedFile.id, content);
-        setDraft(buildFileDraft(selectedFile, content));
-      })();
-    };
-
-    const handleFileSave = async () => {
-      setIsSaving(true);
-      try {
-        const result = await updateFile(selectedFile.id, { content: draft.content });
-        if (result.ok) {
-          originalFileContentById.current.set(selectedFile.id, draft.content);
-          if (result.reloadFailed) {
-            toast.warning(
-              result.message || t('settings.plugins.toast.reloadFailed'),
-              { description: result.warning },
-            );
-          } else if (result.restartDeferred) {
-            toast.success(t('settings.view.pendingRestart.saved'));
-          } else {
-            toast.success(result.message || t('settings.plugins.toast.updated'));
-          }
-        } else {
-          toast.error(result.message || t('settings.plugins.toast.reloadFailed'));
-        }
-      } finally {
-        setIsSaving(false);
-      }
-    };
-
     return (
       <SettingsPageLayout
         title={t('settings.plugins.page.header.file')}
@@ -338,7 +291,7 @@ export const PluginsPage: React.FC = () => {
             </span>
           </>
         )}
-        showSaveStatus={false}
+        onBlurCapture={autosave.onBlurCapture}
       >
         <SettingsSection
           title={t('settings.plugins.page.field.content')}
@@ -350,29 +303,19 @@ export const PluginsPage: React.FC = () => {
             onChange={(e) =>
               setDraft({ ...draft, content: e.target.value })
             }
+            onKeyDown={(event) => {
+              // The file editor is long enough that leaving the field to save
+              // is a chore; the usual shortcut writes it where you are.
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                autosave.requestSave();
+              }
+            }}
             rows={16}
             className="font-mono typography-meta min-h-[320px]"
             spellCheck={false}
             disabled={isLoadingFile}
           />
-          <div className="flex items-center gap-2 pt-3">
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => void handleFileSave()}
-              disabled={!isDirty || isSaving || isLoadingFile}
-            >
-              {t('settings.plugins.page.action.save')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleFileDiscard}
-              disabled={isSaving || isLoadingFile}
-            >
-              {t('settings.plugins.page.action.discard')}
-            </Button>
-          </div>
         </SettingsSection>
       </SettingsPageLayout>
     );

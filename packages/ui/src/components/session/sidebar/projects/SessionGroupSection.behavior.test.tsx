@@ -5,7 +5,7 @@ import { I18nProvider } from '@/lib/i18n';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
 import { useUIStore } from '@/stores/useUIStore';
 import type { SessionFolder } from '@/stores/useSessionFoldersStore';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import type { SessionGroupSectionProps } from './SessionGroupSection';
 import { installHookTestDom } from '../test-utils/testDom';
 
@@ -20,8 +20,6 @@ type RowPropsCapture = Pick<SessionGroupSectionProps,
   | 'isSessionSearchOpen'
   | 'sessionSearchQuery'
   | 'deleteSessionConfirm'
-  | 'copiedSessionId'
-  | 'setCopiedSessionId'
 >;
 
 let folderCallbacks: FolderCallbacks | null = null;
@@ -50,7 +48,7 @@ mock.module('@/sync/sync-context', () => ({
   useDirectoryStore: () => null,
   useGlobalSessionStatus: () => null,
   useSessionPermissions: () => null,
-  useSessionQuestionCount: () => 0,
+  useSessionFormCount: () => 0,
   useSyncSDK: () => null,
   useSyncDirectory: () => null,
   buildSessionMessageRecordsSnapshot: () => [],
@@ -123,7 +121,6 @@ const createProps = (): SessionGroupSectionProps => ({
   expandedParents: new Set(),
   editingId: null,
   editTitle: '',
-  copiedSessionId: null,
   openSidebarMenuKey: null,
   setEditingId: () => undefined,
   setEditTitle: () => undefined,
@@ -137,7 +134,6 @@ const createProps = (): SessionGroupSectionProps => ({
   setIsSessionSearchOpen: () => undefined,
   deleteSessionConfirm: null,
   setDeleteSessionConfirm: () => undefined,
-  setCopiedSessionId: () => undefined,
   startSessionWorktreeMenuLoad: () => ({
     cachedTargets: [],
     refreshTargets: Promise.resolve([]),
@@ -180,28 +176,22 @@ describe('SessionGroupSection public behavior', () => {
     const root = createRoot(dom.container);
     const firstSelected = () => undefined;
     const nextSelected = () => undefined;
-    const firstCopied = () => undefined;
-    const nextCopied = () => undefined;
     const initialProps = createProps();
 
     try {
-      await act(async () => root.render(<I18nProvider><SessionGroupSection {...initialProps} group={groupWithSession} onSessionSelected={firstSelected} setCopiedSessionId={firstCopied} /></I18nProvider>));
+      await act(async () => root.render(<I18nProvider><SessionGroupSection {...initialProps} group={groupWithSession} onSessionSelected={firstSelected} /></I18nProvider>));
       expect(rowPropsCapture?.onSessionSelected).toBe(firstSelected);
       expect(rowPropsCapture?.sessionSearchQuery).toBe('');
       expect(rowPropsCapture?.deleteSessionConfirm).toBeNull();
-      expect(rowPropsCapture?.copiedSessionId).toBeNull();
-      expect(rowPropsCapture?.setCopiedSessionId).toBe(firstCopied);
 
       // SAFETY: the confirmation is only forwarded by identity to the row mock.
       const confirmation = { session: { id: 'session-a' } as Session, descendantCount: 0, descendantIds: [], archivedBucket: false };
-      await act(async () => root.render(<I18nProvider><SessionGroupSection {...initialProps} group={groupWithSession} allowReselect onSessionSelected={nextSelected} isSessionSearchOpen sessionSearchQuery="search" deleteSessionConfirm={confirmation} copiedSessionId="session-a" setCopiedSessionId={nextCopied} /></I18nProvider>));
+      await act(async () => root.render(<I18nProvider><SessionGroupSection {...initialProps} group={groupWithSession} allowReselect onSessionSelected={nextSelected} isSessionSearchOpen sessionSearchQuery="search" deleteSessionConfirm={confirmation} /></I18nProvider>));
       expect(rowPropsCapture?.allowReselect).toBe(true);
       expect(rowPropsCapture?.onSessionSelected).toBe(nextSelected);
       expect(rowPropsCapture?.isSessionSearchOpen).toBe(true);
       expect(rowPropsCapture?.sessionSearchQuery).toBe('search');
       expect(rowPropsCapture?.deleteSessionConfirm).toBe(confirmation);
-      expect(rowPropsCapture?.copiedSessionId).toBe('session-a');
-      expect(rowPropsCapture?.setCopiedSessionId).toBe(nextCopied);
     } finally {
       await act(async () => root.unmount());
       rowPropsCapture = null;

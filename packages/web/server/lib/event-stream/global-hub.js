@@ -1,5 +1,6 @@
 import { createUpstreamSseReader } from './upstream-reader.js';
 import { serializeMessageStreamWsEvent } from './protocol.js';
+import { translateWireEvent } from './translate-v2.js';
 
 // Raised from 512 → 2048 to improve recovery after brief disconnects during
 // long-running agent sessions where many events accumulate quickly.
@@ -54,6 +55,7 @@ export function createGlobalMessageStreamHub({
       typeof envelope?.directory === 'string' && envelope.directory.length > 0 ? envelope.directory : 'global';
     const eventId = typeof envelope?.eventId === 'string' && envelope.eventId.length > 0 ? envelope.eventId : undefined;
     let serializedFrame;
+    let translated;
     return {
       envelope,
       payload,
@@ -62,6 +64,13 @@ export function createGlobalMessageStreamHub({
       serialize() {
         serializedFrame ??= serializeMessageStreamWsEvent(payload, { directory, eventId });
         return serializedFrame;
+      },
+      // Browser clients receive the raw wire payload and translate it
+      // themselves; server-side subscribers read this instead. Translating
+      // lazily keeps the cost off the WS fan-out path when nothing listens.
+      translated() {
+        translated ??= translateWireEvent(payload);
+        return translated;
       },
     };
   };
@@ -80,7 +89,7 @@ export function createGlobalMessageStreamHub({
       buildUrl: () => {
         buildUrlFailed = false;
         try {
-          return new URL(buildOpenCodeUrl('/global/event', ''));
+          return new URL(buildOpenCodeUrl('/api/event', ''));
         } catch {
           buildUrlFailed = true;
           throw new Error('OpenCode service unavailable');

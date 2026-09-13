@@ -6,7 +6,6 @@ import { refreshAfterOpenCodeRestart } from '@/stores/useAgentsStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { opencodeClient } from '@/lib/opencode/client';
 import { runtimeFetch } from '@/lib/runtime-fetch';
-import { noteDeferredRestartFromPayload } from '@/lib/opencode/deferredRestart';
 
 export type PluginScope = 'user' | 'project';
 type PluginParsedKind = 'npm' | 'path';
@@ -24,7 +23,8 @@ export interface PluginFile {
   id: string;
   fileName: string;
   scope: PluginScope;
-  kind: 'file';
+  /** `file` is a `.ts`/`.js` OpenChamber can open; `package` is a plugin directory (or a v1 `plugin/` file) OpenCode loads but the page only lists. */
+  kind: 'file' | 'package';
 }
 
 export interface PluginDraft {
@@ -42,7 +42,6 @@ type PluginMutationResult = {
   message?: string;
   warning?: string;
   requiresManualRestart?: boolean;
-  restartDeferred?: boolean;
 };
 
 export type RegistryResult =
@@ -91,8 +90,6 @@ type RegistryInfoResponse = {
 type PluginMutationPayload = {
   success?: boolean;
   requiresReload?: boolean;
-  requiresRestart?: boolean;
-  restartDeferred?: boolean;
   requiresManualRestart?: boolean;
   message?: string;
   reloadDelayMs?: number;
@@ -448,17 +445,6 @@ async function runPluginMutation(
       return {
         ok: true,
         requiresManualRestart: true,
-        reloadFailed: payload?.reloadFailed === true,
-        message: payload?.message,
-        warning: payload?.warning,
-      };
-    }
-
-    if (noteDeferredRestartFromPayload(payload, 'plugins', { id: options?.restartId })) {
-      await get().loadPlugins({ force: true });
-      return {
-        ok: true,
-        restartDeferred: true,
         reloadFailed: payload?.reloadFailed === true,
         message: payload?.message,
         warning: payload?.warning,

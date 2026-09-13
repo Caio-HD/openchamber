@@ -17,7 +17,7 @@ animation. Do not restore separate draft and session composer branches:
 remounting the editor loses focus and interrupts the transition. Keep the
 existing mobile fixed-position rules unchanged.
 
-`ComposerFloatingPanel` is the shared frame for `BtwPanel` and
+`ComposerFloatingPanel` is the shared frame for `BtwPanel`, `FormDock` and
 `QueuedMessageChips`. They mount inside the composer form, outside both the
 full editor and collapsed mobile pill, with one absolute `bottom-full`
 anchor, input-column width, gap, and glass surface. Appearing, disappearing,
@@ -25,13 +25,24 @@ or collapsing a panel does not resize the transcript or composer.
 The frame also owns the header row through its `header` and `compact` props;
 callers supply controls and content, not their own header padding.
 
+`FormDock` is the agent's question (a v2 form request) for the composer's
+session, one field per step with a segment row, Back / Next, and Submit in
+place of Next on the last step; `when`-gated fields join or leave the steps
+as answers change, an `external` field is an information step, Enter in a
+text box moves to the next step and Cmd/Ctrl+Enter submits. Submit is
+enabled only once every question is answered; a submit with a required
+question still open jumps to it. It shows the
+oldest pending form and counts the rest in its header. The BTW sheet keeps
+the inline `FormCard` for its child session's forms; both render a field
+through `FormFieldControl`.
+
 `SessionSuggestionChip` is not a frame: it renders as the composer's own top
 row, inside the box and inside the mobile pill, so the surface stays one
-shape. Visibility priority is BTW, then a nonempty queue, then suggestion.
-Every BTW frame, including its collapsed strip, creation state, and pending
-draft, hides the other two. Composer content also hides suggestion;
-new-session drafts hide both queue and suggestion. Hiding the queue does not
-pause its delivery.
+shape. Visibility priority is BTW, then a pending form, then a nonempty
+queue, then suggestion. Every BTW frame, including its collapsed strip,
+creation state, and pending draft, hides the other three. Composer content
+also hides suggestion; new-session drafts hide form, queue and suggestion.
+Hiding the queue does not pause its delivery.
 
 The queue header toggles an `aria-expanded` disclosure with the current count.
 Its collapse state is local to the mounted runtime/directory/session queue key

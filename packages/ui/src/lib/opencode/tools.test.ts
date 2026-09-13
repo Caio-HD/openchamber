@@ -1,0 +1,118 @@
+import { describe, expect, test } from "bun:test"
+
+import {
+  blocksOnForm,
+  carriesFileDiffs,
+  isExplorationTool,
+  isFileChangeTool,
+  isShellTool,
+  isSubagentTool,
+  isWebTool,
+  normalizeToolName,
+  subagentSessionId,
+  toolDescription,
+  toolFileDiffs,
+  toolInputPath,
+} from "./tools"
+
+describe("tool identity", () => {
+  test("recognizes the v2 names, not the v1 ones", () => {
+    expect(isShellTool("shell")).toBe(true)
+    expect(isShellTool("bash")).toBe(false)
+    expect(isSubagentTool("subagent")).toBe(true)
+    expect(isSubagentTool("task")).toBe(false)
+    expect(isFileChangeTool("patch")).toBe(true)
+    expect(isFileChangeTool("apply_patch")).toBe(false)
+    expect(isExplorationTool("list")).toBe(false)
+    expect(isExplorationTool("grep")).toBe(true)
+    expect(isWebTool("webfetch")).toBe(true)
+    expect(blocksOnForm("question")).toBe(true)
+  })
+
+  test("normalizes namespaced and deduplicated names", () => {
+    expect(normalizeToolName("opencode.session_rename")).toBe("session_rename")
+    expect(normalizeToolName(" Shell:2 ")).toBe("shell")
+    expect(isShellTool("runtime.shell:3")).toBe(true)
+    expect(normalizeToolName(undefined)).toBe("")
+  })
+
+  test("only edit and patch results carry per-file diffs", () => {
+    expect(carriesFileDiffs("edit")).toBe(true)
+    expect(carriesFileDiffs("patch")).toBe(true)
+    expect(carriesFileDiffs("write")).toBe(false)
+  })
+})
+
+describe("tool input and metadata", () => {
+  test("reads the v2 path key and the legacy ones MCP tools use", () => {
+    expect(toolInputPath({ path: "src/a.ts" })).toBe("src/a.ts")
+    expect(toolInputPath({ filePath: "src/b.ts" })).toBe("src/b.ts")
+    expect(toolInputPath({ file_path: "src/c.ts" })).toBe("src/c.ts")
+    expect(toolInputPath({})).toBe(undefined)
+  })
+
+  test("parses FileDiff.Info entries and drops malformed ones", () => {
+    const files = toolFileDiffs({
+      files: [
+        { file: "a.ts", patch: "@@", additions: 2, deletions: 1, status: "modified" },
+        { patch: "@@" },
+        null,
+      ],
+    })
+
+    expect(files).toEqual([{ file: "a.ts", patch: "@@", additions: 2, deletions: 1, status: "modified" }])
+  })
+
+  test("reads the subagent child session from metadata", () => {
+    expect(subagentSessionId({ sessionID: "ses_child", status: "running" })).toBe("ses_child")
+    expect(subagentSessionId({})).toBe(undefined)
+  })
+})
+
+describe("tool row description", () => {
+  test("shell shows the first line of the command", () => {
+    expect(toolDescription("shell", { command: "git status\ngit log" }, undefined)).toEqual({
+      kind: "text",
+      value: "git status",
+    })
+  })
+
+  test("subagent shows the 3-5 word label the model wrote", () => {
+    expect(toolDescription("subagent", { agent: "Explore", description: "Find the tool renderers" }, undefined))
+      .toEqual({ kind: "text", value: "Find the tool renderers" })
+  })
+
+  test("file tools show their path, patch shows its files", () => {
+    expect(toolDescription("edit", { path: "src/a.ts" }, undefined)).toEqual({ kind: "path", value: "src/a.ts" })
+    expect(toolDescription("read", { path: "src/a.ts" }, undefined)).toEqual({ kind: "path", value: "src/a.ts" })
+    expect(toolDescription("patch", { patchText: "*** Begin" }, { files: [{ file: "src/a.ts" }] }))
+      .toEqual({ kind: "path", value: "src/a.ts" })
+    expect(toolDescription("patch", {}, { files: [{ file: "a.ts" }, { file: "b.ts" }] }))
+      .toEqual({ kind: "files", count: 2 })
+  })
+
+  test("search and web tools show what they looked for", () => {
+    expect(toolDescription("grep", { pattern: "getRuntime", path: "packages/ui" }, { matches: 100 }))
+      .toEqual({ kind: "text", value: "getRuntime" })
+    expect(toolDescription("glob", { pattern: "*" }, undefined)).toEqual({ kind: "text", value: "*" })
+    expect(toolDescription("webfetch", { url: "https://example.com" }, undefined))
+      .toEqual({ kind: "text", value: "https://example.com" })
+    expect(toolDescription("websearch", { query: "effect schema" }, undefined))
+      .toEqual({ kind: "text", value: "effect schema" })
+  })
+
+  test("question counts what it asked", () => {
+    expect(toolDescription("question", { questions: [{ question: "a" }, { question: "b" }] }, undefined))
+      .toEqual({ kind: "questions", count: 2 })
+    expect(toolDescription("question", { questions: [{ question: "a" }] }, undefined))
+      .toEqual({ kind: "questions", count: 1 })
+  })
+
+  test("MCP tools fall back to their own description, then a path", () => {
+    expect(toolDescription("linear_get_issue", { description: "Fetch OPE-199" }, undefined))
+      .toEqual({ kind: "text", value: "Fetch OPE-199" })
+    expect(toolDescription("custom_tool", { path: "notes.md" }, undefined))
+      .toEqual({ kind: "path", value: "notes.md" })
+    expect(toolDescription("custom_tool", {}, undefined)).toBe(null)
+  })
+})

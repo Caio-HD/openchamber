@@ -1,29 +1,24 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import type { Todo } from '@opencode-ai/sdk/v2/client';
 
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { createChatDraftIdentity, readChatDraft, writeChatDraft } from '@/lib/chatDraftPersistence';
 import { createMessageQueueTarget, getMessageQueueKey, useMessageQueueStore } from '@/stores/messageQueueStore';
 import { createInputHistoryIdentity, createInputHistorySubmission, selectInputHistoryEntries, useInputHistoryStore } from '@/stores/useInputHistoryStore';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
-import { useTodosPersistStore } from '@/stores/useTodosPersistStore';
 import { useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
 import { isSessionPinned, useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { cleanupPersistedSessionState } from './session-deletion-cleanup';
 
-const todo: Todo = { content: 'persisted', status: 'pending', priority: 'medium' };
-
 describe('cleanupPersistedSessionState', () => {
   beforeEach(() => {
     useMessageQueueStore.setState({ queuedMessages: {}, quarantinedLegacyMessages: {} });
-    useTodosPersistStore.setState({ sessions: {} });
     useInlineCommentDraftStore.setState({ drafts: {}, touchedAt: {} });
     useSessionPinnedStore.setState({ ids: new Set(), touchedAt: {} });
     useSessionFoldersStore.setState({ foldersMap: {}, collapsedFolderIds: new Set() });
     useInputHistoryStore.setState({ globalBuckets: {}, sessionBuckets: {}, scope: 'session' });
   });
 
-  test('clears queue and todos only for the deleted composite session', () => {
+  test('clears persisted session state only for the deleted composite session', () => {
     const runtimeKey = getRuntimeKey();
     const deleted = createMessageQueueTarget('session-1', '/repo-a', runtimeKey)!;
     const retained = createMessageQueueTarget('session-1', '/repo-b', runtimeKey)!;
@@ -35,8 +30,6 @@ describe('cleanupPersistedSessionState', () => {
         [getMessageQueueKey(retained)]: [{ id: 'q-retain', content: 'retain', text: 'retain', createdAt: 1 }],
       },
     });
-    useTodosPersistStore.getState().setSessionTodos('/repo-a', 'session-1', [todo]);
-    useTodosPersistStore.getState().setSessionTodos('/repo-b', 'session-1', [todo]);
     const deletedDraft = createChatDraftIdentity(runtimeKey, '/repo-a', 'session-1')!;
     const retainedDraft = createChatDraftIdentity(runtimeKey, '/repo-b', 'session-1')!;
     writeChatDraft(deletedDraft, 'delete', []);
@@ -63,8 +56,6 @@ describe('cleanupPersistedSessionState', () => {
 
     expect(useMessageQueueStore.getState().getQueueForTarget(deleted)).toEqual([]);
     expect(useMessageQueueStore.getState().getQueueForTarget(retained)).toHaveLength(1);
-    expect(useTodosPersistStore.getState().getSessionTodos('/repo-a', 'session-1')).toBe(undefined);
-    expect(useTodosPersistStore.getState().getSessionTodos('/repo-b', 'session-1')).toEqual([todo]);
     expect(readChatDraft(deletedDraft).text).toBe('');
     expect(readChatDraft(retainedDraft).text).toBe('retain');
     expect(useInlineCommentDraftStore.getState().getDrafts({ directory: '/repo-a', sessionKey: 'session-1' })).toEqual([]);
@@ -77,11 +68,11 @@ describe('cleanupPersistedSessionState', () => {
 
   test('rejects stale runtime cleanup', () => {
     const runtimeKey = getRuntimeKey();
-    useTodosPersistStore.getState().setSessionTodos('/repo', 'session-1', [todo]);
+    useSessionPinnedStore.getState().toggle({ directory: '/repo', sessionId: 'session-1' });
 
     cleanupPersistedSessionState({ runtimeKey: `${runtimeKey}-stale`, directory: '/repo', sessionId: 'session-1' });
 
-    expect(useTodosPersistStore.getState().getSessionTodos('/repo', 'session-1')).toEqual([todo]);
+    expect(isSessionPinned(useSessionPinnedStore.getState().ids, '/repo', 'session-1')).toBe(true);
   });
 
   test('removes only the deleted session input-history bucket', () => {

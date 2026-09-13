@@ -6,7 +6,7 @@
  * Message/part data is always loaded from the server.
  */
 
-import type { Session, VcsInfo } from "@opencode-ai/sdk/v2/client"
+import type { Session, Vcs } from "@/lib/opencode/model"
 import type { ProjectMeta } from "./types"
 import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from "@/lib/runtime-switch"
 import { countSyncPersistenceSerialization, countSyncPersistenceStorageWrite } from "./performance-diagnostics"
@@ -209,7 +209,7 @@ if (typeof window !== "undefined") {
 // ---------------------------------------------------------------------------
 
 export type PersistedDirCache = {
-  vcs: VcsInfo | undefined
+  vcs: Vcs | undefined
   projectMeta: ProjectMeta | undefined
   icon: string | undefined
   sessions: Session[] | undefined
@@ -218,7 +218,7 @@ export type PersistedDirCache = {
 /** Read all cached metadata for a directory */
 export function readDirCache(directory: string): PersistedDirCache {
   return {
-    vcs: readCache<VcsInfo>(directory, "vcs"),
+    vcs: readCache<Vcs>(directory, "vcs"),
     projectMeta: readCache<ProjectMeta>(directory, "projectMeta"),
     icon: readCache<string>(directory, "icon"),
     sessions: readCache<Session[]>(directory, "sessions"),
@@ -260,7 +260,7 @@ export function persistManagedChatSessions(sessions: Session[]): void {
 }
 
 /** Write vcs info to cache */
-export function persistVcs(directory: string, vcs: VcsInfo | undefined): void {
+export function persistVcs(directory: string, vcs: Vcs | undefined): void {
   writeCache(directory, "vcs", vcs)
 }
 

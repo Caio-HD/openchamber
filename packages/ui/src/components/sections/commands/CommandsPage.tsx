@@ -1,11 +1,11 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { selectCommandsForDirectory, useCommandsStore, type CommandConfig, type CommandScope } from '@/stores/useCommandsStore';
-import { usePendingOpenCodeRestartStore } from '@/stores/usePendingOpenCodeRestartStore';
 import { useShallow } from 'zustand/react/shallow';
 import { ModelSelector } from '../agents/ModelSelector';
 import { AgentSelector } from './AgentSelector';
@@ -18,14 +18,34 @@ import {
 } from '@/components/ui/select';
 import { Icon } from "@/components/icon/Icon";
 import { useI18n } from '@/lib/i18n';
-import { parseModelIdentifier } from '@/lib/modelIdentifier';
+import { formatModelSelection, parseModelIdentifier, parseModelSelection } from '@/lib/modelIdentifier';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
+import { SettingsLegacyFormatNote } from '@/components/sections/shared/SettingsLegacyFormatNote';
+import {
+  useAutosave,
+  AUTOSAVE_SAVED,
+  AUTOSAVE_UNCHANGED,
+  autosaveFailed,
+  type AutosaveResult,
+} from '@/components/sections/shared/SettingsAutosave';
 import {
   SettingsSection,
   SettingsFieldRow,
   SETTINGS_SELECT_SIZE,
   SETTINGS_CUSTOM_TRIGGER_CLASS,
 } from '@/components/sections/shared/SettingsSection';
+
+/** Everything the page writes into the command's config file. */
+interface CommandFormState {
+  draftName: string;
+  draftScope: CommandScope;
+  description: string;
+  agent: string;
+  model: string;
+  variant: string;
+  subagent: boolean;
+  template: string;
+}
 
 export const CommandsPage: React.FC = () => {
   const { t } = useI18n();
@@ -36,6 +56,7 @@ export const CommandsPage: React.FC = () => {
     updateCommand,
     commandDraft,
     setCommandDraft,
+    setSelectedCommand,
   } = useCommandsStore(useShallow((s) => ({
     selectedCommandName: s.selectedCommandName,
     getCommandByName: s.getCommandByName,
@@ -43,6 +64,7 @@ export const CommandsPage: React.FC = () => {
     updateCommand: s.updateCommand,
     commandDraft: s.commandDraft,
     setCommandDraft: s.setCommandDraft,
+    setSelectedCommand: s.setSelectedCommand,
   })));
 
   // Settings browses whichever project its own selector points at; the app
@@ -57,16 +79,12 @@ export const CommandsPage: React.FC = () => {
   const [description, setDescription] = React.useState('');
   const [agent, setAgent] = React.useState('');
   const [model, setModel] = React.useState('');
+  const [variant, setVariant] = React.useState('');
+  const [subagent, setSubagent] = React.useState(false);
   const [template, setTemplate] = React.useState('');
-  const [isSaving, setIsSaving] = React.useState(false);
-  const initialStateRef = React.useRef<{
-    draftName: string;
-    draftScope: CommandScope;
-    description: string;
-    agent: string;
-    model: string;
-    template: string;
-  } | null>(null);
+  const [isCreating, setIsCreating] = React.useState(false);
+  // What the command file currently holds; a save writes only the difference.
+  const savedRef = React.useRef<CommandFormState | null>(null);
 
   React.useEffect(() => {
     if (isNewCommand && commandDraft) {
@@ -74,125 +92,161 @@ export const CommandsPage: React.FC = () => {
       const draftScopeValue = commandDraft.scope || 'user';
       const descriptionValue = commandDraft.description || '';
       const agentValue = commandDraft.agent || '';
-      const modelValue = commandDraft.model || '';
+      const parsedModel = parseModelSelection(commandDraft.model);
+      const modelValue = parsedModel ? `${parsedModel.providerID}/${parsedModel.modelID}` : '';
+      const variantValue = parsedModel?.variant || '';
+      const subagentValue = commandDraft.subagent === true;
       const templateValue = commandDraft.template || '';
       setDraftName(draftNameValue);
       setDraftScope(draftScopeValue);
       setDescription(descriptionValue);
       setAgent(agentValue);
       setModel(modelValue);
+      setVariant(variantValue);
+      setSubagent(subagentValue);
       setTemplate(templateValue);
 
-      initialStateRef.current = {
+      savedRef.current = {
         draftName: draftNameValue,
         draftScope: draftScopeValue,
         description: descriptionValue,
         agent: agentValue,
         model: modelValue,
+        variant: variantValue,
+        subagent: subagentValue,
         template: templateValue,
       };
     } else if (selectedCommand) {
       const descriptionValue = selectedCommand.description || '';
       const agentValue = selectedCommand.agent || '';
-      const modelValue = selectedCommand.model || '';
+      const parsedModel = parseModelSelection(selectedCommand.model);
+      const modelValue = parsedModel ? `${parsedModel.providerID}/${parsedModel.modelID}` : '';
+      const variantValue = parsedModel?.variant || '';
+      const subagentValue = selectedCommand.subagent === true;
       const templateValue = selectedCommand.template || '';
+      const saved = savedRef.current;
+      // OpenCode re-reads the file right after our own write, so the store
+      // echoes back what we just saved. Only a genuinely different server
+      // value is allowed to replace what the user has in the form.
+      if (
+        saved &&
+        saved.description === descriptionValue &&
+        saved.agent === agentValue &&
+        saved.model === modelValue &&
+        saved.variant === variantValue &&
+        saved.subagent === subagentValue &&
+        saved.template === templateValue
+      ) {
+        return;
+      }
       setDescription(descriptionValue);
       setAgent(agentValue);
       setModel(modelValue);
+      setVariant(variantValue);
+      setSubagent(subagentValue);
       setTemplate(templateValue);
 
-      initialStateRef.current = {
+      savedRef.current = {
         draftName: '',
         draftScope: 'user',
         description: descriptionValue,
         agent: agentValue,
         model: modelValue,
+        variant: variantValue,
+        subagent: subagentValue,
         template: templateValue,
       };
     }
   }, [selectedCommand, isNewCommand, selectedCommandName, commands, commandDraft]);
 
-  const isDirty = React.useMemo(() => {
-    const initial = initialStateRef.current;
-    if (!initial) {
-      return false;
+  const buildConfig = React.useCallback((commandName: string): CommandConfig => {
+    const trimmedAgent = agent.trim();
+    const parsedModel = parseModelIdentifier(model.trim());
+    const joinedModel = parsedModel
+      ? formatModelSelection({
+          providerID: parsedModel.providerId,
+          modelID: parsedModel.modelId,
+          variant: variant.trim() || undefined,
+        })
+      : null;
+    return {
+      name: commandName,
+      description: description.trim() || undefined,
+      agent: trimmedAgent === '' ? null : trimmedAgent,
+      model: joinedModel,
+      subagent,
+      template: template.trim(),
+      scope: isNewCommand ? draftScope : undefined,
+    };
+  }, [agent, description, draftScope, isNewCommand, model, subagent, template, variant]);
+
+  // An existing command writes itself; a new one only exists once the user
+  // confirms it, so an abandoned draft never reaches disk.
+  const save = React.useCallback(async (): Promise<AutosaveResult> => {
+    const saved = savedRef.current;
+    const commandName = selectedCommandName?.trim();
+    if (isNewCommand || !saved || !commandName) return AUTOSAVE_UNCHANGED;
+
+    const unchanged =
+      description === saved.description &&
+      agent === saved.agent &&
+      model === saved.model &&
+      variant === saved.variant &&
+      subagent === saved.subagent &&
+      template === saved.template;
+    if (unchanged) return AUTOSAVE_UNCHANGED;
+
+    if (!template.trim()) {
+      return autosaveFailed(t('settings.commands.page.toast.templateRequired'));
     }
 
-    if (isNewCommand) {
-      if (draftName !== initial.draftName) return true;
-      if (draftScope !== initial.draftScope) return true;
+    const success = await updateCommand(commandName, buildConfig(commandName), settingsDirectory);
+    if (!success) {
+      return autosaveFailed(t('settings.commands.page.toast.updateFailed'));
     }
 
-    if (description !== initial.description) return true;
-    if (agent !== initial.agent) return true;
-    if (model !== initial.model) return true;
-    if (template !== initial.template) return true;
-    return false;
-  }, [agent, description, draftName, draftScope, isNewCommand, model, template]);
+    savedRef.current = { ...saved, description, agent, model, variant, subagent, template };
+    return AUTOSAVE_SAVED;
+  }, [agent, buildConfig, description, isNewCommand, model, selectedCommandName, settingsDirectory, subagent, t, template, updateCommand, variant]);
 
-  const handleSave = async () => {
-    const commandName = isNewCommand ? draftName.trim().replace(/\s+/g, '-') : selectedCommandName?.trim();
-    
+  const autosave = useAutosave(save);
+  const { requestSave } = autosave;
+
+  const handleCreate = async () => {
+    const commandName = draftName.trim().replace(/\s+/g, '-');
     if (!commandName) {
       toast.error(t('settings.commands.sidebar.toast.commandNameRequired'));
       return;
     }
-
     if (!template.trim()) {
       toast.error(t('settings.commands.page.toast.templateRequired'));
       return;
     }
-
-    if (isNewCommand && commands.some((cmd) => cmd.name === commandName)) {
+    if (commands.some((cmd) => cmd.name === commandName)) {
       toast.error(t('settings.commands.sidebar.toast.commandExists'));
       return;
     }
 
-    setIsSaving(true);
-
+    setIsCreating(true);
     try {
-      const trimmedAgent = agent.trim();
-      const trimmedModel = model.trim();
-      const trimmedTemplate = template.trim();
-      const config: CommandConfig = {
-        name: commandName,
-        description: description.trim() || undefined,
-        agent: trimmedAgent === '' ? null : trimmedAgent,
-        model: trimmedModel === '' ? null : trimmedModel,
-        template: trimmedTemplate,
-        scope: isNewCommand ? draftScope : undefined,
-      };
-
-      let success: boolean;
-      if (isNewCommand) {
-        success = await createCommand(config, settingsDirectory);
-        if (success) {
-          setCommandDraft(null); 
-        }
-      } else {
-        success = await updateCommand(commandName, config, settingsDirectory);
-      }
-
+      const success = await createCommand(buildConfig(commandName), settingsDirectory);
       if (success) {
-        const deferred = usePendingOpenCodeRestartStore.getState().changes.some(
-          (change) => change.scope === 'commands' && change.id.startsWith(`commands:${commandName}:`),
-        );
-        toast.success(
-          deferred
-            ? t('settings.view.pendingRestart.saved')
-            : isNewCommand
-              ? t('settings.commands.page.toast.created')
-              : t('settings.commands.page.toast.updated'),
-        );
+        setCommandDraft(null);
+        toast.success(t('settings.commands.page.toast.created'));
       } else {
-        toast.error(isNewCommand ? t('settings.commands.page.toast.createFailed') : t('settings.commands.page.toast.updateFailed'));
+        toast.error(t('settings.commands.page.toast.createFailed'));
       }
     } catch (error) {
-      console.error('Error saving command:', error);
+      console.error('Error creating command:', error);
       toast.error(t('settings.commands.page.toast.saveUnexpectedError'));
     } finally {
-      setIsSaving(false);
+      setIsCreating(false);
     }
+  };
+
+  const handleCancelCreate = () => {
+    setCommandDraft(null);
+    setSelectedCommand(null);
   };
 
   if (!selectedCommandName) {
@@ -211,8 +265,11 @@ export const CommandsPage: React.FC = () => {
     <SettingsPageLayout
       title={isNewCommand ? t('settings.commands.page.title.new') : `/${selectedCommandName}`}
       description={isNewCommand ? t('settings.commands.page.subtitle.new') : t('settings.commands.page.subtitle.edit')}
-      showSaveStatus={false}
+      onBlurCapture={autosave.onBlurCapture}
     >
+      {!isNewCommand && selectedCommand && (
+        <SettingsLegacyFormatNote legacy={selectedCommand.legacy === true} path={selectedCommand.path} />
+      )}
       <SettingsSection
         title={t('settings.commands.page.section.identity')}
         divider={false}
@@ -278,7 +335,10 @@ export const CommandsPage: React.FC = () => {
         >
           <AgentSelector
             agentName={agent}
-            onChange={(agentName: string) => setAgent(agentName)}
+            onChange={(agentName: string) => {
+              setAgent(agentName);
+              requestSave();
+            }}
             className={SETTINGS_CUSTOM_TRIGGER_CLASS}
           />
         </SettingsFieldRow>
@@ -296,8 +356,38 @@ export const CommandsPage: React.FC = () => {
               } else {
                 setModel('');
               }
+              requestSave();
             }}
             className={SETTINGS_CUSTOM_TRIGGER_CLASS}
+          />
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          settingsItem="commands.variant"
+          label={t('settings.agents.page.field.variant')}
+          info={t('settings.agents.page.field.variantTooltip')}
+        >
+          <Input
+            value={variant}
+            onChange={(event) => setVariant(event.target.value)}
+            placeholder={t('settings.agents.page.field.variantPlaceholder')}
+            disabled={!model && !variant}
+            className="h-8 w-40 rounded-md px-3"
+          />
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          settingsItem="commands.subagent"
+          label={t('settings.commands.page.field.subagent')}
+          info={t('settings.commands.page.field.subagentTooltip')}
+        >
+          <Switch
+            checked={subagent}
+            onCheckedChange={(checked) => {
+              setSubagent(checked);
+              requestSave();
+            }}
+            aria-label={t('settings.commands.page.field.subagent')}
           />
         </SettingsFieldRow>
       </SettingsSection>
@@ -311,23 +401,34 @@ export const CommandsPage: React.FC = () => {
           onChange={(e) => setTemplate(e.target.value)}
           placeholder={t('settings.commands.page.field.templatePlaceholder')}
           rows={12}
-          className="w-full font-mono typography-meta min-h-[160px] max-h-[60vh] bg-transparent resize-y"
+          className="w-full font-mono typography-meta min-h-[160px] max-h-[60vh] bg-transparent"
         />
         <p className="mt-2 typography-meta text-muted-foreground">
           <code className="text-foreground">$ARGUMENTS</code> {t('settings.commands.page.templateHint.userInput')} &middot;{' '}
           <code className="text-foreground">!`cmd`</code> {t('settings.commands.page.templateHint.shellOutput')} &middot;{' '}
           <code className="text-foreground">@file</code> {t('settings.commands.page.templateHint.fileContents')}
         </p>
-        <div className="pt-3">
-          <Button
-            onClick={handleSave}
-            disabled={isSaving || !isDirty}
-            size="xs"
-            className="!font-normal"
-          >
-            {isSaving ? t('settings.common.actions.saving') : t('settings.common.actions.saveChanges')}
-          </Button>
-        </div>
+        {isNewCommand && (
+          <div className="flex items-center gap-2 pt-3">
+            <Button
+              onClick={() => void handleCreate()}
+              disabled={isCreating || !draftName.trim() || !template.trim()}
+              size="xs"
+              className="!font-normal"
+            >
+              {isCreating ? t('settings.common.actions.saving') : t('settings.common.actions.create')}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={handleCancelCreate}
+              disabled={isCreating}
+              size="xs"
+              className="!font-normal"
+            >
+              {t('settings.common.actions.cancel')}
+            </Button>
+          </div>
+        )}
       </SettingsSection>
     </SettingsPageLayout>
   );

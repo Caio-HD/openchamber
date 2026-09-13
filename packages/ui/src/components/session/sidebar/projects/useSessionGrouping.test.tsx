@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 import { I18nProvider } from '@/lib/i18n';
 import { useSessionActions } from '../sessions/useSessionActions';
 import { useSessionGrouping } from './useSessionGrouping';
@@ -11,10 +11,10 @@ type FixtureSession = Session & { parentID?: string };
 const session = (id: string, parentID?: string): Session => {
   const value: FixtureSession = {
     id,
-    slug: id,
     projectID: 'project',
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     title: id,
-    version: '1',
     directory: '/workspace',
     time: { created: 1, updated: 1 },
   };
@@ -87,8 +87,6 @@ describe('useSessionGrouping malformed hierarchy fallbacks', () => {
         setEditTitle: () => undefined,
         editingId: null,
         editTitle: '',
-        copiedSessionId: null,
-        setCopiedSessionId: () => undefined,
       }).handleDeleteSession;
       return null;
     };

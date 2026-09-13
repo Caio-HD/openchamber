@@ -1,6 +1,7 @@
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import type { OpencodeClient, Session } from "@opencode-ai/sdk/v2"
+import type { Session } from "@/lib/opencode/model"
+import type { SessionPage } from "@/lib/opencode/client"
 
 import { opencodeClient } from "@/lib/opencode/client"
 import { useGlobalSessionsStore } from "./useGlobalSessionsStore"
@@ -23,37 +24,35 @@ const deferred = <T>(): Deferred<T> => {
 
 let listRequest: Deferred<Session[]>
 
-// The store issues one inclusive (`archived: true`) paginated request per
-// load/refresh scope and splits active/archived client-side, so restored
-// sessions (`time.archived` falsy-but-present) stay visible in the active
-// list. The mock serves that single request.
-const sdk = {
-  experimental: {
-    session: {
-      list: async () => ({
-        data: await listRequest.promise,
-        response: { headers: new Headers() },
-      }),
-    },
-  },
-} as unknown as OpencodeClient
-const originalGetSdkClient = opencodeClient.getSdkClient
+// The store issues one paginated request per load/refresh scope and splits
+// active/archived client-side, so restored sessions (`time.archived`
+// falsy-but-present) stay visible in the active list. The mock serves that
+// single request.
+const listSessionsPage = async (): Promise<SessionPage> => ({
+  sessions: await listRequest.promise,
+  cursor: {},
+})
+const originalListSessionsPage = opencodeClient.listSessionsPage
 
 const session = (id: string, title = id, archived?: number): Session => ({
   id,
+  projectID: 'project',
+  directory: '',
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   title,
   time: { created: 1, updated: 1, ...(archived !== undefined ? { archived } : {}) },
-} as Session)
+})
 
 describe("global session mutation reconciliation", () => {
   beforeEach(() => {
     listRequest = deferred<Session[]>()
-    opencodeClient.getSdkClient = () => sdk
+    opencodeClient.listSessionsPage = listSessionsPage
     useGlobalSessionsStore.getState().resetForRuntimeSwitch()
   })
 
   afterEach(() => {
-    opencodeClient.getSdkClient = originalGetSdkClient
+    opencodeClient.listSessionsPage = originalListSessionsPage
   })
 
   test("keeps a session created after a full load starts", async () => {

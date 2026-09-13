@@ -42,7 +42,6 @@ type Props = {
   notifyOnSubtasks: boolean;
   editingId: string | null;
   editTitle: string;
-  copiedSessionId: string | null;
   openSidebarMenuKey: string | null;
   mobileVariant: boolean;
   alwaysShowActions: boolean;
@@ -62,7 +61,6 @@ type Props = {
   | 'deleteSessionConfirm'
   | 'setDeleteSessionConfirm'
   | 'startFolderRename'
-  | 'setCopiedSessionId'
   | 'startSessionWorktreeMenuLoad'
 >;
 
@@ -201,7 +199,6 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
             notifyOnSubtasks={props.notifyOnSubtasks}
             editingId={props.editingId}
             editTitle={props.editTitle}
-            copiedSessionId={props.copiedSessionId}
             openSidebarMenuKey={props.openSidebarMenuKey}
             mobileVariant={props.mobileVariant}
             alwaysShowActions={props.alwaysShowActions}
@@ -223,7 +220,6 @@ export function SidebarActivitySections(props: Props): React.ReactNode {
             deleteSessionConfirm={props.deleteSessionConfirm}
             setDeleteSessionConfirm={props.setDeleteSessionConfirm}
             startFolderRename={props.startFolderRename}
-            setCopiedSessionId={props.setCopiedSessionId}
             startSessionWorktreeMenuLoad={props.startSessionWorktreeMenuLoad}
           />
         );

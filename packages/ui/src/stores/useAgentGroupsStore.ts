@@ -6,7 +6,7 @@ import { useProjectsStore } from './useProjectsStore';
 import { deleteSessionInDirectory } from '@/sync/session-actions';
 import { retry } from '@/sync/retry';
 import type { WorktreeMetadata } from '@/types/worktree';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -225,21 +225,13 @@ export const useAgentGroupsStore = create<Store>()(
         }
 
         // 2. Fetch sessions for each worktree directory (parallel, max 5)
-        const api = opencodeClient.getApiClient();
         const allSessions: Session[] = [];
         const failedDirectories = new Set<string>();
 
         const fetchDir = async (dir: string) => {
           try {
-            const res = await retry(async () => {
-              const result = await api.session.list({ directory: dir });
-              if ((result as { error?: unknown }).error) {
-                throw new Error(`session.list failed for ${dir}: ${String((result as { error?: unknown }).error)}`);
-              }
-              return result;
-            });
-            const list = Array.isArray(res.data) ? res.data : [];
-            for (const s of list) if (s?.id) allSessions.push(s);
+            const page = await retry(() => opencodeClient.listSessionsPage({ directory: dir }));
+            for (const session of page.sessions) if (session?.id) allSessions.push(session);
           } catch {
             failedDirectories.add(dir);
           }

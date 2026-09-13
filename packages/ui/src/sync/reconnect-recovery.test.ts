@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, SessionStatus } from "@opencode-ai/sdk/v2/client"
-import type { Session } from "@opencode-ai/sdk/v2"
+import type { Message, Part, Session, SessionStatus } from "@/lib/opencode/model"
 import { getReconnectCandidateSessionIds, mergeBootstrapSessions } from "./reconnect-recovery"
 
 function createSession(id: string, overrides: Partial<Session> = {}): Session {
@@ -43,6 +42,18 @@ describe("getReconnectCandidateSessionIds", () => {
         incomplete: [createAssistantMessage("m-1", "incomplete")],
       },
     }).sort()).toEqual(["busy", "incomplete", "parent"])
+  })
+
+  test("still recovers an incomplete turn when a plumbing message trails it", () => {
+    const synthetic = { id: "s-1", sessionID: "incomplete", role: "synthetic", time: { created: 2 }, text: "plugin prompt" } as unknown as Message
+
+    expect(getReconnectCandidateSessionIds({
+      session: [createSession("incomplete")],
+      session_status: { incomplete: { type: "idle" } as SessionStatus },
+      message: {
+        incomplete: [createAssistantMessage("m-1", "incomplete"), synthetic],
+      },
+    })).toContain("incomplete")
   })
 
   test("includes the currently viewed session even when it looks idle and complete", () => {

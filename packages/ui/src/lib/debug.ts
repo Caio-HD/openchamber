@@ -263,19 +263,13 @@ export const debugUtils = {
     let opencodeHealth: unknown = null;
 
     try {
-      const pathResult = await opencodeClient.getSdkClient().path.get(
-        currentDirectory ? { directory: currentDirectory } : undefined
-      );
-      pathInfo = pathResult.error ? { error: pathResult.error } : pathResult.data;
+      pathInfo = await opencodeClient.getLocation(currentDirectory);
     } catch (error) {
       pathInfo = { error: error instanceof Error ? error.message : String(error) };
     }
 
     try {
-      const projectResult = await opencodeClient.getSdkClient().project.current(
-        currentDirectory ? { directory: currentDirectory } : undefined
-      );
-      projectInfo = projectResult.error ? { error: projectResult.error } : projectResult.data;
+      projectInfo = await opencodeClient.getCurrentProject(currentDirectory);
     } catch (error) {
       projectInfo = { error: error instanceof Error ? error.message : String(error) };
     }

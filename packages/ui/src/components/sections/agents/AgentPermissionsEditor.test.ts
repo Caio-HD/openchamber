@@ -1,58 +1,92 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parsePermissionConfig, serializePermissionModel } from './agentPermissionModel';
+import type { PermissionRule } from '@/stores/useAgentsStore';
 
-const roundTrip = (config: unknown) => serializePermissionModel(parsePermissionConfig(config));
+import {
+  effectiveEffect,
+  modelsEqual,
+  parseRules,
+  serializeRules,
+} from './agentPermissionModel';
 
-describe('agent permission source round-trip', () => {
-  test('null and empty configs stay unset', () => {
-    expect(roundTrip(null)).toBeNull();
-    expect(roundTrip(undefined)).toBeNull();
-    expect(roundTrip({})).toBeNull();
+const rule = (action: string, resource: string, effect: PermissionRule['effect']): PermissionRule => ({ action, resource, effect });
+
+describe('per-tool view of an ordered rule list', () => {
+  test('an empty ruleset is an empty model and serializes back to nothing', () => {
+    expect(parseRules([])).toEqual({ global: null, keys: {} });
+    expect(serializeRules(parseRules([]))).toEqual([]);
   });
 
-  test('bare action string becomes the * key', () => {
-    expect(roundTrip('ask')).toEqual({ '*': 'ask' });
+  test('the agent wildcard, a tool wildcard and its patterns round-trip', () => {
+    const rules = [
+      rule('*', '*', 'allow'),
+      rule('shell', '*', 'ask'),
+      rule('shell', 'git status *', 'allow'),
+      rule('shell', 'git push *', 'deny'),
+    ];
+    const model = parseRules(rules);
+    expect(model.global).toBe('allow');
+    expect(model.keys.shell).toEqual({
+      effect: 'ask',
+      patterns: [
+        { pattern: 'git status *', effect: 'allow' },
+        { pattern: 'git push *', effect: 'deny' },
+      ],
+    });
+    expect(serializeRules(model)).toEqual(rules);
   });
 
-  test('flat per-key actions survive verbatim', () => {
-    const config = { '*': 'allow', bash: 'ask', edit: 'deny' };
-    expect(roundTrip(config)).toEqual(config);
+  test('a pattern always follows its tool wildcard so it overrides the broad rule', () => {
+    // Stored in an order where the wildcard would win; the editor rewrites it
+    // so the pattern wins, which is what the user asked for.
+    const model = parseRules([rule('shell', 'git push *', 'deny'), rule('shell', '*', 'allow')]);
+    expect(serializeRules(model)).toEqual([rule('shell', '*', 'allow'), rule('shell', 'git push *', 'deny')]);
   });
 
-  test('nested pattern maps survive verbatim, including wildcard inside', () => {
-    const config = {
-      '*': 'ask',
-      bash: { '*': 'ask', 'rm -rf *': 'deny', 'git status': 'allow' },
-      external_directory: { '/tmp/**': 'allow' },
-    };
-    expect(roundTrip(config)).toEqual(config);
+  test('when a tool has two wildcard rules the last one counts', () => {
+    const model = parseRules([rule('edit', '*', 'allow'), rule('edit', '*', 'deny')]);
+    expect(model.keys.edit.effect).toBe('deny');
   });
 
-  test('pattern-only key without wildcard stays pattern-only (no synthesized default)', () => {
-    const config = { read: { '/secret/**': 'deny' } };
-    expect(roundTrip(config)).toEqual(config);
+  test('legacy v1 keys are dropped rather than written back', () => {
+    const model = parseRules([rule('doom_loop', '*', 'ask'), rule('bash', '*', 'allow'), rule('shell', '*', 'allow')]);
+    expect(Object.keys(model.keys)).toEqual(['shell']);
   });
 
-  test('explicit allow is preserved — not conflated with unset', () => {
-    expect(roundTrip({ bash: 'allow' })).toEqual({ bash: 'allow' });
-    expect(roundTrip({ '*': 'allow' })).toEqual({ '*': 'allow' });
+  test('MCP and plugin tools survive as their own rows', () => {
+    const model = parseRules([rule('playwright_click', '*', 'ask')]);
+    expect(model.keys.playwright_click).toEqual({ effect: 'ask', patterns: [] });
   });
 
-  test('unknown junk values are dropped, valid siblings kept', () => {
-    expect(roundTrip({ bash: 'ask', broken: 42, worse: ['deny'] })).toEqual({ bash: 'ask' });
+  test('blank patterns are not written', () => {
+    const model = parseRules([rule('read', '*', 'allow')]);
+    model.keys.read.patterns.push({ pattern: '   ', effect: 'deny' });
+    expect(serializeRules(model)).toEqual([rule('read', '*', 'allow')]);
   });
 
-  test('clearing everything serializes to null (key removed from config)', () => {
-    const model = parsePermissionConfig({ bash: 'ask' });
-    model.keys = {};
-    model.global = null;
-    expect(serializePermissionModel(model)).toBeNull();
+  test('equality compares what would be written, not row objects', () => {
+    const a = parseRules([rule('shell', '*', 'ask')]);
+    const b = parseRules([rule('shell', '*', 'ask')]);
+    b.keys.shell.patterns.push({ pattern: '', effect: 'allow' });
+    expect(modelsEqual(a, b)).toBe(true);
+  });
+});
+
+describe('effectiveEffect', () => {
+  test('OpenCode defaults allow everything except external directories', () => {
+    expect(effectiveEffect('shell', { global: [], agentGlobal: null })).toBe('allow');
+    expect(effectiveEffect('external_directory', { global: [], agentGlobal: null })).toBe('ask');
   });
 
-  test('blank patterns are not persisted', () => {
-    const model = parsePermissionConfig({});
-    model.keys.bash = { action: 'ask', patterns: [{ pattern: '   ', action: 'deny' }] };
-    expect(serializePermissionModel(model)).toEqual({ bash: 'ask' });
+  test('global config rules override the defaults', () => {
+    expect(effectiveEffect('shell', { global: [rule('shell', '*', 'deny')], agentGlobal: null })).toBe('deny');
+  });
+
+  test("the agent's own wildcard overrides both", () => {
+    expect(effectiveEffect('shell', { global: [rule('shell', '*', 'deny')], agentGlobal: 'ask' })).toBe('ask');
+  });
+
+  test('pattern rules do not decide the tool-wide answer', () => {
+    expect(effectiveEffect('read', { global: [rule('read', '*.env', 'deny')], agentGlobal: null })).toBe('allow');
   });
 });

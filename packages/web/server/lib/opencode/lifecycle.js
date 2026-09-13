@@ -17,7 +17,33 @@ const HEALTH_CHECK_MAX_CONSECUTIVE_FAILURES = parsePositiveInt(
 );
 const HEALTH_CHECK_INTERVAL_OVERRIDE_MS = parsePositiveInt(process.env.OPENCHAMBER_OPENCODE_HEALTH_INTERVAL_MS, 0);
 const HEALTH_CHECK_RESULT_CACHE_MS = parsePositiveInt(process.env.OPENCHAMBER_OPENCODE_HEALTH_CACHE_MS, 750);
-const OPENCODE_HEALTH_PATH = '/global/health';
+const OPENCODE_HEALTH_PATH = '/api/health';
+const OPENCODE_REQUIRED_MAJOR_VERSION = 2;
+
+/**
+ * OpenChamber talks to OpenCode 2.x only. v1 serves its routes without the
+ * `/api` prefix, publishes a different event vocabulary and has no `plugins`
+ * config key, so an older binary fails in a hundred small ways instead of one
+ * clear one.
+ *
+ * The version comes from the health payload rather than from `opencode
+ * --version`: it costs no extra process, and it also covers an external
+ * OpenCode the user started themselves. `/api/health` only exists in 2.x, so a
+ * 404 there is the same answer by another route.
+ */
+const OPENCODE_VERSION_REQUIREMENT_DETAIL =
+  `OpenChamber requires OpenCode ${OPENCODE_REQUIRED_MAJOR_VERSION}.x`;
+
+const classifyOpenCodeVersion = (version) => {
+  if (typeof version !== 'string') return { ok: true };
+  const match = version.match(/v?(\d+)\./);
+  if (!match) return { ok: true };
+  if (Number(match[1]) >= OPENCODE_REQUIRED_MAJOR_VERSION) return { ok: true };
+  return {
+    ok: false,
+    detail: `${OPENCODE_VERSION_REQUIREMENT_DETAIL}, found ${version.trim()}. Update OpenCode and start OpenChamber again.`,
+  };
+};
 // Last-used directory plus the three most recently opened projects — deeper
 // tails are unlikely to be the user's first click and just add background work.
 const WARMUP_DIRECTORY_LIMIT = 4;
@@ -471,12 +497,10 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
         stdout += chunk.toString();
         const lines = stdout.split('\n');
         for (const line of lines) {
-          if (!line.startsWith('opencode server listening')) continue;
-          const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
-          if (!match) {
-            finish(reject, new Error(`Failed to parse server url from output: ${line}`));
-            return;
-          }
+          // OpenCode 2.x prints `server listening on http://host:port` with no
+          // "opencode" prefix.
+          const match = line.match(/server listening on\s+(https?:\/\/\S+)/);
+          if (!match) continue;
           attachRuntimeStderrCapture();
           finish(resolve, match[1]);
           return;
@@ -599,7 +623,9 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
           healthy: false,
           failure: {
             class: 'invalid_response',
-            detail: `Health endpoint returned HTTP ${response.status ?? 'unknown'}`,
+            detail: response.status === 404
+              ? `${OPENCODE_VERSION_REQUIREMENT_DETAIL}: this server has no /api/health, which every 2.x server serves.`
+              : `Health endpoint returned HTTP ${response.status ?? 'unknown'}`,
           },
         };
       }
@@ -622,6 +648,13 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
             class: 'invalid_response',
             detail: 'Health endpoint did not report healthy=true',
           },
+        };
+      }
+      const version = classifyOpenCodeVersion(body?.version);
+      if (!version.ok) {
+        return {
+          healthy: false,
+          failure: { class: 'invalid_response', detail: version.detail },
         };
       }
       return { healthy: true, failure: null };
@@ -994,14 +1027,16 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const response = await fetch(buildOpenCodeUrl('/agent'), {
+        const response = await fetch(buildOpenCodeUrl('/api/agent'), {
           method: 'GET',
           headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },
         });
 
         if (response.ok) {
-          const agents = await response.json();
-          if (Array.isArray(agents) && agents.some((agent) => agent?.name === agentName)) {
+          // OpenCode 2.x answers `/api/*` with `{ location, data }`.
+          const body = await response.json();
+          const agents = Array.isArray(body) ? body : body?.data;
+          if (Array.isArray(agents) && agents.some((agent) => agent?.id === agentName)) {
             return;
           }
         }
@@ -1168,7 +1203,10 @@ export const createOpenCodeLifecycleRuntime = (deps) => {
       try {
         const controller = new AbortController();
         timeout = setTimeout(() => controller.abort(), WARMUP_REQUEST_TIMEOUT_MS);
-        const url = `${buildOpenCodeUrl('/session/status', '')}?directory=${encodeURIComponent(directory)}`;
+        // Warming a directory is the point, not the answer: any directory-scoped
+        // read makes OpenCode initialise it. `/api/session` is the cheapest one
+        // that takes a directory (`/api/session/active` is global).
+        const url = `${buildOpenCodeUrl('/api/session', '')}?directory=${encodeURIComponent(directory)}&limit=1`;
         await fetch(url, {
           method: 'GET',
           headers: { Accept: 'application/json', ...getOpenCodeAuthHeaders() },

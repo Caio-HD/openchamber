@@ -11,6 +11,7 @@ import { normalizeWindowsDriveLetter } from './pathUtils';
 import { resolveWorkingDirectoryChange } from './workingDirectoryChange';
 import { registerManagedProcess, unregisterManagedProcess, reapOrphanedProcesses } from './opencodeProcessRegistry';
 import { applyProviderEnvAliases } from './provider-env-aliases';
+import { checkOpenCodeVersionOutput } from './opencodeVersion';
 
 const t = vscode.l10n.t;
 
@@ -648,8 +649,8 @@ async function waitForReady(
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3000);
 
-        // OpenCode readiness check. Use /global/health for OpenCode 1.15.x compatibility.
-        const url = new URL(`${baseUrl}/global/health`);
+        // OpenCode 2.x readiness check: every route lives under /api.
+        const url = new URL(`${baseUrl}/api/health`);
         const res = await fetch(url.toString(), {
           method: 'GET',
           headers: { Accept: 'application/json', ...authHeaders },
@@ -682,12 +683,37 @@ async function waitForReady(
   return { ok: false, elapsedMs: Date.now() - start, attempts, version: null };
 }
 
+/**
+ * Refuses to start anything but OpenCode 2.x. A 1.x binary serves a different
+ * API surface entirely, so letting it boot produces an app that loads and then
+ * fails every request with no explanation.
+ */
+function assertSupportedOpenCodeBinary(binary: string): void {
+  const launch = resolveWindowsLaunchSpec(binary, ['--version']);
+  const result = spawnSync(launch.binary, launch.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 15000,
+    windowsHide: true,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  const check = checkOpenCodeVersionOutput(output);
+  if (!check.supported) {
+    throw new Error(check.reason);
+  }
+  getManagerOutputChannel().appendLine(`OpenCode CLI version check passed: ${check.version} (${binary})`);
+}
+
 async function spawnManagedOpenCodeServer(
   workingDirectory: string,
   port: number,
   timeoutMs: number
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const binary = stripWrappingQuotes(process.env.OPENCODE_BINARY || 'opencode') || 'opencode';
+  assertSupportedOpenCodeBinary(binary);
   const launch = resolveWindowsLaunchSpec(binary, ['serve', '--hostname', '127.0.0.1', '--port', String(port)]);
   const child = spawn(launch.binary, launch.args, {
     cwd: workingDirectory,
@@ -714,13 +740,10 @@ async function spawnManagedOpenCodeServer(
       output += chunk.toString();
       const lines = output.split('\n');
       for (const line of lines) {
-        if (!line.startsWith('opencode server listening')) continue;
-        const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
-        if (!match) {
-          cleanup();
-          reject(new Error(`Failed to parse server url from output: ${line}`));
-          return;
-        }
+        // OpenCode 2.x prints `server listening on http://host:port` (no
+        // "opencode" prefix); anything else on stdout is noise.
+        const match = line.match(/server listening on\s+(https?:\/\/\S+)/);
+        if (!match) continue;
         cleanup();
         resolve(match[1]);
         return;

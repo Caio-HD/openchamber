@@ -21,7 +21,8 @@ const createRuntime = ({ stored, fetchImpl, retryDelaysMs = [0] } = {}) => {
   return {
     runtime,
     getSettings: () => settings,
-    emit: (payload, directory = '/project') => eventHandler({ payload, directory }),
+    // The hub hands server-side subscribers already-translated events.
+    emit: (payload, directory = '/project') => eventHandler({ payload, directory, translated: () => [payload] }),
     connect: () => statusHandler({ type: 'connect' }),
   };
 };
@@ -64,8 +65,8 @@ describe('permission auto-accept runtime', () => {
   it('fetches missing subagent lineage before replying', async () => {
     const fetchImpl = vi.fn(async (url, init = {}) => {
       const path = new URL(url).pathname;
-      if (path === '/permission') return new Response('[]');
-      if (path === '/session/child') return Response.json({ id: 'child', parentID: 'root', directory: '/project' });
+      if (path === '/api/permission/request') return new Response('[]');
+      if (path === '/api/session/child') return Response.json({ id: 'child', parentID: 'root', directory: '/project' });
       if (init.method === 'POST') return Response.json({});
       return new Response('', { status: 404 });
     });
@@ -74,15 +75,16 @@ describe('permission auto-accept runtime', () => {
       fetchImpl,
     });
     await expect(runtime.processPermission({ id: 'perm', sessionID: 'child' }, '/project')).resolves.toBe(true);
-    expect(fetchImpl.mock.calls.some(([url, init]) => new URL(url).pathname === '/permission/perm/reply' && init.method === 'POST')).toBe(true);
+    // v2 scopes a permission reply under its session.
+    expect(fetchImpl.mock.calls.some(([url, init]) => new URL(url).pathname === '/api/session/child/permission/perm/reply' && init.method === 'POST')).toBe(true);
   });
 
   it('retries a transient reply failure and deduplicates concurrent events', async () => {
     let replyAttempts = 0;
     const fetchImpl = vi.fn(async (url, init = {}) => {
       const path = new URL(url).pathname;
-      if (path === '/permission') return new Response('[]');
-      if (path === '/permission/perm/reply' && init.method === 'POST') {
+      if (path === '/api/permission/request') return new Response('[]');
+      if (path === '/api/session/root/permission/perm/reply' && init.method === 'POST') {
         replyAttempts += 1;
         return replyAttempts === 1 ? new Response('', { status: 503 }) : Response.json({});
       }
@@ -103,8 +105,8 @@ describe('permission auto-accept runtime', () => {
   it('reconciles pending permissions after reconnect', async () => {
     const fetchImpl = vi.fn(async (url, init = {}) => {
       const path = new URL(url).pathname;
-      if (path === '/permission') return Response.json([{ id: 'pending', sessionID: 'root' }]);
-      if (path === '/permission/pending/reply' && init.method === 'POST') return Response.json({});
+      if (path === '/api/permission/request') return Response.json([{ id: 'pending', sessionID: 'root' }]);
+      if (path === '/api/session/root/permission/pending/reply' && init.method === 'POST') return Response.json({});
       return Response.json({ id: 'root' });
     });
     const { connect } = createRuntime({
@@ -113,14 +115,14 @@ describe('permission auto-accept runtime', () => {
     });
     connect();
     await flush();
-    expect(fetchImpl.mock.calls.some(([url]) => new URL(url).pathname === '/permission/pending/reply')).toBe(true);
+    expect(fetchImpl.mock.calls.some(([url]) => new URL(url).pathname === '/api/session/root/permission/pending/reply')).toBe(true);
   });
 
   it('accepts existing pending permissions when a session policy is enabled', async () => {
     const fetchImpl = vi.fn(async (url, init = {}) => {
       const parsed = new URL(url);
       const path = parsed.pathname;
-      if (path === '/permission') {
+      if (path === '/api/permission/request') {
         return parsed.searchParams.get('directory') === '/project'
           ? Response.json([
             { id: 'root-pending', sessionID: 'root' },
@@ -128,8 +130,8 @@ describe('permission auto-accept runtime', () => {
           ])
           : Response.json([]);
       }
-      if (path === '/permission/root-pending/reply' && init.method === 'POST') return Response.json({});
-      if (path === '/session/other') return Response.json({ id: 'other' });
+      if (path === '/api/session/root/permission/root-pending/reply' && init.method === 'POST') return Response.json({});
+      if (path === '/api/session/other') return Response.json({ id: 'other' });
       return new Response('', { status: 404 });
     });
     const { runtime } = createRuntime({ fetchImpl });
@@ -139,7 +141,7 @@ describe('permission auto-accept runtime', () => {
     const replyPaths = fetchImpl.mock.calls
       .filter(([, init]) => init?.method === 'POST')
       .map(([url]) => new URL(url).pathname);
-    expect(replyPaths).toEqual(['/permission/root-pending/reply']);
+    expect(replyPaths).toEqual(['/api/session/root/permission/root-pending/reply']);
     expect(fetchImpl.mock.calls.some(([url]) => new URL(url).searchParams.get('directory') === '/project')).toBe(true);
     expect(await runtime.load()).toEqual({ sessions: { root: true }, revision: 1 });
   });

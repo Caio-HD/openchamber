@@ -1,11 +1,10 @@
 import React from 'react';
 import { useChatColumnSession } from '@/components/chat/chatColumnSession';
-import type { Message, Part, ReasoningPart, TextPart, ToolPart } from '@opencode-ai/sdk/v2';
+import type { Message, Part, ReasoningPart, TextPart, ToolPart } from '@/lib/opencode/model';
 
 import type { MessageStreamPhase } from '@/stores/types/sessionTypes';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { useDirectorySync, useSessionMessages, useSessionPermissions, useSessionQuestions, useSessionStatus } from '@/sync/sync-context';
-import { isFullySyntheticMessage } from '@/lib/messages/synthetic';
+import { useDirectorySync, useSessionMessages, useSessionPermissions, useSessionForms, useSessionStatus } from '@/sync/sync-context';
 import { useCurrentSessionActivity } from './useSessionActivity';
 
 type AssistantActivity = 'idle' | 'streaming' | 'tooling' | 'cooldown' | 'permission';
@@ -77,28 +76,25 @@ const DEFAULT_WORKING: WorkingSummary = {
 
 const EMPTY_PARTS: Part[] = [];
 const STATUS_SIGNATURE_SEPARATOR = '\u0000';
-const EDITING_TOOLS = new Set(['edit', 'write', 'multiedit', 'apply_patch']);
-const TOOL_STATUS_PHRASES: Record<string, string> = {
+const EDITING_TOOLS = new Set(['edit', 'write', 'patch']);
+// v2 tool names. `shell` replaced `bash`, `subagent` replaced `task`, and
+// `todowrite`/`todoread`/`list`/`lsp` are gone.
+const TOOL_STATUS_PHRASES = new Map(Object.entries({
     read: 'reading file',
     write: 'writing file',
     edit: 'editing file',
-    multiedit: 'editing files',
-    apply_patch: 'applying patch',
-    bash: 'running command',
+    patch: 'applying patch',
+    'file-diff': 'reading changes',
+    shell: 'running command',
     grep: 'searching content',
     glob: 'finding files',
-    list: 'listing directory',
-    task: 'delegating task',
+    subagent: 'delegating task',
     webfetch: 'fetching URL',
     websearch: 'searching web',
     codesearch: 'web code search',
-    todowrite: 'updating todos',
-    todoread: 'reading todos',
     skill: 'learning skill',
     question: 'asking question',
-    plan_enter: 'switching to planning',
-    plan_exit: 'switching to building',
-};
+}));
 const WORKING_PHRASES = [
     'working',
     'processing',
@@ -124,7 +120,7 @@ type ParsedStatusResult = {
 };
 
 const getToolStatusPhrase = (toolName: string): string => {
-    return TOOL_STATUS_PHRASES[toolName] ?? `using ${toolName}`;
+    return TOOL_STATUS_PHRASES.get(toolName) ?? `using ${toolName}`;
 };
 
 const hashString = (value: string): number => {
@@ -143,48 +139,46 @@ const createParsedStatus = (parts: Part[], genericKey: string): ParsedStatusResu
     let activePartType: ParsedStatusResult['activePartType'] = undefined;
     let activeToolName: string | undefined = undefined;
 
-    if (!isFullySyntheticMessage(parts)) {
-        for (let index = parts.length - 1; index >= 0; index -= 1) {
-            const part = parts[index];
-            if (!part) continue;
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+        const part = parts[index];
+        if (!part) continue;
 
-            switch (part.type) {
-                case 'reasoning': {
-                    const time = part.time ?? getPartTimeInfo(part);
-                    const stillRunning = !time || typeof time.end === 'undefined';
-                    if (stillRunning && !activePartType) {
-                        activePartType = 'reasoning';
-                    }
-                    break;
+        switch (part.type) {
+            case 'reasoning': {
+                const time = part.time ?? getPartTimeInfo(part);
+                const stillRunning = !time || typeof time.end === 'undefined';
+                if (stillRunning && !activePartType) {
+                    activePartType = 'reasoning';
                 }
-                case 'tool': {
-                    const toolStatus = part.state?.status;
-                    if ((toolStatus === 'running' || toolStatus === 'pending') && !activePartType) {
-                        const toolName = getToolDisplayName(part);
-                        if (EDITING_TOOLS.has(toolName)) {
-                            activePartType = 'editing';
-                            activeToolName = toolName;
-                        } else {
-                            activePartType = 'tool';
-                            activeToolName = toolName;
-                        }
-                    }
-                    break;
-                }
-                case 'text': {
-                    const rawContent = getLegacyTextContent(part) ?? '';
-                    if (typeof rawContent === 'string' && rawContent.trim().length > 0) {
-                        const time = getPartTimeInfo(part);
-                        const streamingPart = !time || typeof time.end === 'undefined';
-                        if (streamingPart && !activePartType) {
-                            activePartType = 'text';
-                        }
-                    }
-                    break;
-                }
-                default:
-                    break;
+                break;
             }
+            case 'tool': {
+                const toolStatus = part.state?.status;
+                if ((toolStatus === 'running' || toolStatus === 'pending') && !activePartType) {
+                    const toolName = getToolDisplayName(part);
+                    if (EDITING_TOOLS.has(toolName)) {
+                        activePartType = 'editing';
+                        activeToolName = toolName;
+                    } else {
+                        activePartType = 'tool';
+                        activeToolName = toolName;
+                    }
+                }
+                break;
+            }
+            case 'text': {
+                const rawContent = getLegacyTextContent(part) ?? '';
+                if (typeof rawContent === 'string' && rawContent.trim().length > 0) {
+                    const time = getPartTimeInfo(part);
+                    const streamingPart = !time || typeof time.end === 'undefined';
+                    if (streamingPart && !activePartType) {
+                        activePartType = 'text';
+                    }
+                }
+                break;
+            }
+            default:
+                break;
         }
     }
 
@@ -259,46 +253,22 @@ const getToolDisplayName = (part: ToolPart): string => {
 };
 
 export const getActiveAssistantContext = (messages: Message[]): ActiveAssistantContext => {
-    let assistantId: string | null = null;
-    let parentId: string | null = null;
-
+    // OpenCode v2 records the provider and model on the assistant message
+    // itself, so the active model no longer has to be looked up on the user
+    // message that triggered the turn (which no longer links back to it).
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
         if (message?.role !== 'assistant') continue;
 
-        const candidate = message as Message & { parentID?: unknown };
-        assistantId = message.id;
-        parentId = typeof candidate.parentID === 'string' && candidate.parentID.trim().length > 0
-            ? candidate.parentID
-            : null;
-        break;
-    }
-
-    if (!assistantId || !parentId) {
-        return { assistantId, model: null };
-    }
-
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
-        if (message?.role !== 'user' || message.id !== parentId) continue;
-
-        const candidate = message as Message & {
-            model?: { providerID?: unknown; modelID?: unknown };
-        };
-        const providerId = typeof candidate.model?.providerID === 'string'
-            ? candidate.model.providerID.trim()
-            : '';
-        const modelId = typeof candidate.model?.modelID === 'string'
-            ? candidate.model.modelID.trim()
-            : '';
-
+        const providerId = message.providerID.trim();
+        const modelId = message.modelID.trim();
         return {
-            assistantId,
+            assistantId: message.id,
             model: providerId && modelId ? { providerId, modelId } : null,
         };
     }
 
-    return { assistantId, model: null };
+    return { assistantId: null, model: null };
 };
 
 export function useAssistantStatus(): AssistantStatusSnapshot {
@@ -332,7 +302,7 @@ export function useAssistantStatus(): AssistantStatusSnapshot {
     );
 
     const sessionPermissionRequests = useSessionPermissions(currentSessionId ?? '', currentSessionDirectory ?? undefined);
-    const sessionQuestionRequests = useSessionQuestions(currentSessionId ?? '', currentSessionDirectory ?? undefined);
+    const sessionFormRequests = useSessionForms(currentSessionId ?? '', currentSessionDirectory ?? undefined);
 
     const sessionAbortRecord = useSessionUIStore(
         React.useCallback((state) => {
@@ -434,13 +404,13 @@ export function useAssistantStatus(): AssistantStatusSnapshot {
         }
 
         const hasPendingPermission = sessionPermissionRequests.length > 0;
-        const hasPendingQuestion = sessionQuestionRequests.length > 0;
+        const hasPendingForm = sessionFormRequests.length > 0;
 
-        if (!hasPendingPermission && !hasPendingQuestion) {
+        if (!hasPendingPermission && !hasPendingForm) {
             return baseWorking;
         }
 
-        if (hasPendingQuestion) {
+        if (hasPendingForm) {
             return {
                 ...baseWorking,
                 statusText: null,
@@ -461,7 +431,7 @@ export function useAssistantStatus(): AssistantStatusSnapshot {
             canAbort: false,
             retryInfo: null,
         };
-    }, [baseWorking, sessionPermissionRequests, sessionQuestionRequests]);
+    }, [baseWorking, sessionPermissionRequests, sessionFormRequests]);
 
     return {
         activeModel: activeAssistant.model,

@@ -5,7 +5,6 @@ import {
   SettingsCheckboxRow,
   SETTINGS_OPTION_STACK_CLASS,
 } from '@/components/sections/shared/SettingsSection';
-import { recordDeferredOpenCodeRestart } from '@/lib/opencode/deferredRestart';
 import { updateDesktopSettings } from '@/lib/persistence';
 import { useAgentMemoryStore } from '@/stores/useAgentMemoryStore';
 import { useUIStore } from '@/stores/useUIStore';
@@ -18,9 +17,9 @@ import { useI18n } from '@/lib/i18n';
  * belong together and not under the CLI's own configuration — the binary path
  * is about which OpenCode runs, these are about what it can do.
  *
- * A toggle is written immediately but only reaches agents once OpenCode
- * restarts, so each one records a pending restart rather than implying the
- * change is already live.
+ * A toggle only writes the setting: the server keeps OpenChamber's plugin
+ * injection in a watched file, so OpenCode picks the change up on its own and
+ * the tool list is live without a restart.
  */
 export const OpenChamberToolsSettings: React.FC = () => {
   const { t } = useI18n();
@@ -37,13 +36,11 @@ export const OpenChamberToolsSettings: React.FC = () => {
   const handleAgentControlToolChange = React.useCallback((enabled: boolean) => {
     setAgentControlToolEnabled(enabled);
     void updateDesktopSettings({ agentControlToolEnabled: enabled });
-    recordDeferredOpenCodeRestart('cli', { id: 'agent-control-tool' });
   }, [setAgentControlToolEnabled]);
 
   const handleAgentWebToolChange = React.useCallback((enabled: boolean) => {
     setAgentWebToolEnabled(enabled);
     void updateDesktopSettings({ agentWebToolEnabled: enabled });
-    recordDeferredOpenCodeRestart('cli', { id: 'agent-web-tool' });
   }, [setAgentWebToolEnabled]);
 
   // Turning memory off removes the whole feature, not just the tool: the panel
@@ -61,7 +58,6 @@ export const OpenChamberToolsSettings: React.FC = () => {
           void useAgentMemoryStore.getState().refresh();
         }
       });
-    recordDeferredOpenCodeRestart('cli', { id: 'agent-memory-tool' });
   }, [setAgentMemoryToolEnabled]);
 
   return (

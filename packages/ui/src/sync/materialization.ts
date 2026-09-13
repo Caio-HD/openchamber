@@ -1,4 +1,4 @@
-import type { Message, Part } from "@opencode-ai/sdk/v2/client"
+import type { Message, Part } from "@/lib/opencode/model"
 import { mergeMessages } from "./optimistic"
 import type { SessionMaterializationReason } from "./event-reducer"
 import { sortMessagesChronologically } from "./message-ordering"
@@ -302,7 +302,7 @@ export function materializeSessionSnapshots(
     const incoming = incomingByID.get(existing.id)
     if (
       existing.role !== "assistant"
-      || existing.error?.name !== "MessageAbortedError"
+      || existing.error?.type !== "aborted"
       || incoming?.role !== "assistant"
       || incoming.time.completed === undefined
     ) continue

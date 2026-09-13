@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Session } from '@opencode-ai/sdk/v2/client';
+import type { Session } from '@/lib/opencode/model';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -18,6 +18,7 @@ import { getFusionSessionTitle, parseMultiRunSessionTitle } from '@/lib/multirun
 import { renderMagicPrompt } from '@/lib/magicPrompts';
 import { AgentSelector } from './AgentSelector';
 import { ModelMultiSelect, generateInstanceId, type ModelSelectionWithId } from './ModelMultiSelect';
+import { listModelVariantIds, type ModelVariantSource } from '@/lib/modelVariants';
 
 type FusionSource = {
   session: Session;
@@ -40,18 +41,11 @@ const getLastAssistantText = async (source: FusionSource): Promise<string> => {
   const messages = getSyncMessages(source.session.id, directory);
 
   if (messages.length === 0 && source.directory) {
-    const result = await opencodeClient.withDirectory(source.directory, () =>
-      opencodeClient.getSdkClient().session.messages({
-        sessionID: source.session.id,
-        directory: source.directory ?? undefined,
-        limit: 50,
-      })
-    );
-    const records = result.data ?? [];
-    for (let index = records.length - 1; index >= 0; index -= 1) {
-      const record = records[index] as { info?: { role?: string }; parts?: unknown[] };
-      if (record.info?.role !== 'assistant') continue;
-      return flattenAssistantTextParts((record.parts ?? []) as Parameters<typeof flattenAssistantTextParts>[0]).trim();
+    // Newest first, so the first assistant record is the last reply.
+    const page = await opencodeClient.getSessionMessages(source.session.id, { limit: 50 }, source.directory);
+    for (const record of page.items) {
+      if (record.info.role !== 'assistant') continue;
+      return flattenAssistantTextParts(record.parts).trim();
     }
     return '';
   }
@@ -127,8 +121,8 @@ export function MultiRunFusionDialog({
   }, [allSessions, open, parsed, session.id]);
 
   const selectedProvider = providers.find((provider) => provider.id === providerID);
-  const selectedProviderModel = selectedProvider?.models.find((model) => model.id === modelID) as { variants?: Record<string, unknown> } | undefined;
-  const variantKeys = selectedProviderModel?.variants ? Object.keys(selectedProviderModel.variants) : [];
+  const selectedProviderModel = selectedProvider?.models.find((model) => model.id === modelID) as { variants?: ModelVariantSource } | undefined;
+  const variantKeys = listModelVariantIds(selectedProviderModel?.variants);
   const canStart = Boolean(parsed && providerID && modelID && sources.length > 0 && !isStarting);
 
   const handleModelSelect = React.useCallback((model: ModelSelectionWithId) => {
@@ -160,7 +154,10 @@ export function MultiRunFusionDialog({
         renderMagicPrompt('session.fusion.visible'),
         renderMagicPrompt('session.fusion.instructions'),
       ]);
-      const fusionSession = await useSessionUIStore.getState().createSession(fusionTitle, directory, null);
+      const fusionSession = await useSessionUIStore.getState().createSession(fusionTitle, directory, undefined, {
+        model: { providerID, id: modelID, variant: variant || undefined },
+        agent: agent || undefined,
+      });
       if (!fusionSession) throw new Error('Failed to create fusion session');
 
       useSessionUIStore.getState().setCurrentSession(fusionSession.id, directory);
@@ -169,14 +166,13 @@ export function MultiRunFusionDialog({
       await opencodeClient.sendMessage({
         id: fusionSession.id,
         providerID,
-        modelID,
-        variant: variant || undefined,
+        model: { providerID, id: modelID, variant: variant || undefined },
         agent: agent || undefined,
         text: visiblePrompt,
-        additionalParts: [
-          { text: instructionsPrompt, synthetic: true },
-          ...usableSources.map((item, index) => ({ text: buildSourcePart(item.source, item.text, index), synthetic: true })),
-          { text: '\n\n--- FUSION INPUTS END ---\nNow write the final fused answer.', synthetic: true },
+        context: [
+          { text: instructionsPrompt },
+          ...usableSources.map((item, index) => ({ text: buildSourcePart(item.source, item.text, index) })),
+          { text: '\n\n--- FUSION INPUTS END ---\nNow write the final fused answer.' },
         ],
         directory: directory ?? opencodeClient.getDirectory(),
       });

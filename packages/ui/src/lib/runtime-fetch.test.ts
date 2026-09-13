@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { createRuntimeOpencodeClient } from '@/lib/opencode/client';
 import { addRuntimeProxyHeaders, buildRuntimeFetchUrl, isLatin1Safe, runtimeFetch, sanitizeHeadersForBrowser } from './runtime-fetch';
 import { clearRuntimeAuthCredentialProvider, setRuntimeBearerToken } from './runtime-auth';
 import { configureRuntimeUrlResolver, getRuntimeUrlResolver, setRuntimeUrlResolver } from './runtime-url';
@@ -101,64 +101,48 @@ describe('runtimeFetch transport contract', () => {
           body: await request.clone().text(),
           headers: request.headers,
         });
-        return new Response(JSON.stringify({ ok: true, id: 'ses_1', time: { created: 1 } }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
+        // The generated client checks each route's declared success status:
+        // staging a revert answers 200 with a body, the other mutations 204.
+        if (request.url.endsWith('/revert/stage')) {
+          return new Response(JSON.stringify({ ok: true, id: 'ses_1', time: { created: 1 } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(null, { status: 204 });
       }) as typeof fetch;
 
-      const client = createOpencodeClient({
-        baseUrl: 'https://app.example/api',
-        fetch: runtimeFetch,
-      });
+      const client = createRuntimeOpencodeClient({ baseUrl: 'https://app.example/api', directory: '/repo' });
 
-      await client.session.revert({ sessionID: 'ses_1', directory: '/repo', messageID: 'msg_1' });
-      await client.session.shell({
-        sessionID: 'ses_1',
-        directory: '/repo',
-        messageID: 'msg_2',
-        agent: 'build',
-        model: { providerID: 'anthropic', modelID: 'claude-sonnet' },
-        command: 'ls',
-      });
-      await client.session.update({ sessionID: 'ses_1', directory: '/repo', time: { archived: 123 } });
-      await client.permission.reply({ requestID: 'perm_1', directory: '/repo', reply: 'once' });
-      await client.question.reply({ requestID: 'q_1', directory: '/repo', answers: [['yes']] });
-      await client.auth.set({ providerID: 'anthropic', auth: { type: 'api', key: 'secret' } });
-      await client.provider.oauth.callback({ providerID: 'github-copilot', method: 0, code: 'oauth-code' });
+      await client.session.revert.stage({ sessionID: 'ses_1', messageID: 'msg_1' });
+      await client.session.shell({ sessionID: 'ses_1', command: 'ls' });
+      await client.session.rename({ sessionID: 'ses_1', title: 'Renamed' });
+      await client.permission.reply({ sessionID: 'ses_1', requestID: 'perm_1', reply: 'once' });
+      await client.form.reply({ sessionID: 'ses_1', formID: 'form_1', answer: { confirm: true } });
 
       expect(calls.map((call) => call.url)).toEqual([
-        'https://app.example/api/session/ses_1/revert?directory=%2Frepo',
-        'https://app.example/api/session/ses_1/shell?directory=%2Frepo',
-        'https://app.example/api/session/ses_1?directory=%2Frepo',
-        'https://app.example/api/permission/perm_1/reply?directory=%2Frepo',
-        'https://app.example/api/question/q_1/reply?directory=%2Frepo',
-        'https://app.example/api/auth/anthropic',
-        'https://app.example/api/provider/github-copilot/oauth/callback',
+        'https://app.example/api/session/ses_1/revert/stage',
+        'https://app.example/api/session/ses_1/shell',
+        'https://app.example/api/session/ses_1/rename',
+        'https://app.example/api/session/ses_1/permission/perm_1/reply',
+        'https://app.example/api/session/ses_1/form/form_1/reply',
       ]);
-      expect(calls.map((call) => call.method)).toEqual(['POST', 'POST', 'PATCH', 'POST', 'POST', 'PUT', 'POST']);
+      expect(calls.map((call) => call.method)).toEqual(['POST', 'POST', 'POST', 'POST', 'POST']);
       expect(calls.map((call) => call.headers.get('content-type'))).toEqual([
         'application/json',
         'application/json',
         'application/json',
         'application/json',
         'application/json',
-        'application/json',
-        'application/json',
       ]);
+      // Every request carries the directory as a header, not a query parameter.
+      expect(new Set(calls.map((call) => call.headers.get('x-opencode-directory')))).toEqual(new Set(['%2Frepo']));
       expect(calls.map((call) => JSON.parse(call.body))).toEqual([
         { messageID: 'msg_1' },
-        {
-          messageID: 'msg_2',
-          agent: 'build',
-          model: { providerID: 'anthropic', modelID: 'claude-sonnet' },
-          command: 'ls',
-        },
-        { time: { archived: 123 } },
+        { command: 'ls' },
+        { title: 'Renamed' },
         { reply: 'once' },
-        { answers: [['yes']] },
-        { type: 'api', key: 'secret' },
-        { method: 0, code: 'oauth-code' },
+        { answer: { confirm: true } },
       ]);
     } finally {
       setRuntimeUrlResolver(previous);

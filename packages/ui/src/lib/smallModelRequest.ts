@@ -1,15 +1,23 @@
 import { toast } from 'sonner';
+import { formatMessage, useI18nStore } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
 const SMALL_MODEL_TOAST_ID = 'small-model-unavailable';
 
 const notifySmallModelUnavailable = (): void => {
-  toast.error('Small Model unavailable', {
+  const dictionary = useI18nStore.getState().dictionary;
+  toast.error(formatMessage(dictionary, 'smallModel.toast.unavailable.title'), {
     id: SMALL_MODEL_TOAST_ID,
-    description: 'Choose another model in Settings → Sessions → Small Model and try again.',
+    description: formatMessage(dictionary, 'smallModel.toast.unavailable.description'),
   });
 };
 
+/**
+ * One request to OpenChamber's background model. Any failure that is not in
+ * `silentStatuses` raises the shared "Small Model unavailable" toast; callers
+ * with a graceful fallback (a note kept verbatim, a reply spoken in full)
+ * silence the 404 that means "no model to run on".
+ */
 export async function requestSmallModel(
   init: RequestInit,
   options: { silentStatuses?: number[] } = {},

@@ -9,16 +9,19 @@ function deferred<T>() {
 
 let activeProjectPath = '/workspace/project';
 
-let listCommandsWithDetailsCalls = 0;
-let listCommandsWithDetailsImpl: (directory?: string | null) => Promise<Command[]> = async () => [];
+let listCommandsCalls = 0;
+let listCommandsImpl: (directory?: string | null) => Promise<Command[]> = async () => [];
 let getDirectoryImpl: () => string = () => '/fallback/project';
-let runtimeFetchImpl: () => Promise<Response> = async () => new Response(JSON.stringify({ scope: 'project' }), {
-  headers: { 'Content-Type': 'application/json' },
-});
+// `/api/config/commands/:name/config` answers the stored entity plus where it
+// lives; the v2 `CommandInfo` the list returns carries only name + description.
+let runtimeFetchImpl: () => Promise<Response> = async () => new Response(
+  JSON.stringify({ source: 'md', scope: 'project', path: null, legacy: false, config: {} }),
+  { headers: { 'Content-Type': 'application/json' } },
+);
 
-const listCommandsWithDetailsMock = async (directory?: string | null) => {
-  listCommandsWithDetailsCalls += 1;
-  return listCommandsWithDetailsImpl(directory);
+const listCommandsMock = async (directory?: string | null) => {
+  listCommandsCalls += 1;
+  return listCommandsImpl(directory);
 };
 
 const getDirectoryMock = () => getDirectoryImpl();
@@ -27,7 +30,7 @@ const runtimeFetchMock = async () => runtimeFetchImpl();
 mock.module('@/lib/opencode/client', () => ({
   opencodeClient: {
     getDirectory: getDirectoryMock,
-    listCommandsWithDetails: listCommandsWithDetailsMock,
+    listCommands: listCommandsMock,
   },
 }));
 
@@ -62,12 +65,13 @@ describe('useCommandsStore', () => {
     activeProjectPath = '/workspace/project';
     invalidateCommandsLoadCache(activeProjectPath);
     invalidateCommandsLoadCache('/workspace/other');
-    listCommandsWithDetailsCalls = 0;
-    listCommandsWithDetailsImpl = async () => [];
+    listCommandsCalls = 0;
+    listCommandsImpl = async () => [];
     getDirectoryImpl = () => '/fallback/project';
-    runtimeFetchImpl = async () => new Response(JSON.stringify({ scope: 'project' }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    runtimeFetchImpl = async () => new Response(
+      JSON.stringify({ source: 'md', scope: 'project', path: null, legacy: false, config: {} }),
+      { headers: { 'Content-Type': 'application/json' } },
+    );
 
     useCommandsStore.setState({
       selectedCommandName: null,
@@ -91,7 +95,7 @@ describe('useCommandsStore', () => {
       commands: activeCommands,
       commandsByDirectory: { [activeProjectPath]: activeCommands },
     });
-    listCommandsWithDetailsImpl = async () => [
+    listCommandsImpl = async () => [
       { name: 'other-only', description: 'Other project command', template: 'run there' },
     ];
 
@@ -112,47 +116,47 @@ describe('useCommandsStore', () => {
       scope: 'project' as const,
     }];
     useCommandsStore.setState({ commands: previousCommands, commandsByDirectory: { [activeProjectPath]: previousCommands } });
-    listCommandsWithDetailsImpl = async () => {
+    listCommandsImpl = async () => {
       throw new Error('network down');
     };
 
     const result = await useCommandsStore.getState().loadCommands();
 
     expect(result).toBe(false);
-    expect(listCommandsWithDetailsCalls).toBe(3);
+    expect(listCommandsCalls).toBe(3);
     expect(useCommandsStore.getState().commands).toEqual(previousCommands);
     expect(useCommandsStore.getState().isLoading).toBe(false);
   });
 
   test('first load publishes a directory even when its commands match the previous project', async () => {
-    const commands = [{ name: 'shared', scope: 'project' as const }];
+    const commands = [{ name: 'shared', scope: 'project' as const, path: null, legacy: false }];
     useCommandsStore.setState({
       commands,
       commandsByDirectory: { '/workspace/other': commands },
     });
-    listCommandsWithDetailsImpl = async () => commands;
+    listCommandsImpl = async () => commands;
 
     expect(await useCommandsStore.getState().loadCommands()).toBe(true);
     expect(selectCommandsForDirectory(useCommandsStore.getState(), activeProjectPath)).toEqual(commands);
     expect(await useCommandsStore.getState().loadCommands()).toBe(true);
-    expect(listCommandsWithDetailsCalls).toBe(1);
+    expect(listCommandsCalls).toBe(1);
   });
 
   test('revisiting a cached project restores its mirror without another request', async () => {
-    listCommandsWithDetailsImpl = async () => [{ name: 'first' }];
+    listCommandsImpl = async () => [{ name: 'first' }];
     await useCommandsStore.getState().loadCommands();
     const firstCommands = useCommandsStore.getState().commands;
     activeProjectPath = '/workspace/other';
-    listCommandsWithDetailsImpl = async () => [{ name: 'second' }];
+    listCommandsImpl = async () => [{ name: 'second' }];
     await useCommandsStore.getState().loadCommands();
     activeProjectPath = '/workspace/project';
 
     await useCommandsStore.getState().loadCommands();
     expect(useCommandsStore.getState().commands).toBe(firstCommands);
-    expect(listCommandsWithDetailsCalls).toBe(2);
+    expect(listCommandsCalls).toBe(2);
 
     invalidateCommandsLoadCache(activeProjectPath);
-    listCommandsWithDetailsImpl = async () => [{ name: 'first' }];
+    listCommandsImpl = async () => [{ name: 'first' }];
     useCommandsStore.setState({ commands: [] });
     await useCommandsStore.getState().loadCommands();
     expect(useCommandsStore.getState().commands).toBe(firstCommands);
@@ -161,7 +165,7 @@ describe('useCommandsStore', () => {
   test('a late response only updates its own directory after a project switch', async () => {
     const pending = deferred<Command[]>();
     const started = deferred<void>();
-    listCommandsWithDetailsImpl = async (directory) => {
+    listCommandsImpl = async (directory) => {
       expect(directory).toBe('/workspace/project');
       started.resolve();
       return pending.promise;
@@ -169,7 +173,7 @@ describe('useCommandsStore', () => {
     const firstLoad = useCommandsStore.getState().loadCommands();
     await started.promise;
     activeProjectPath = '/workspace/other';
-    listCommandsWithDetailsImpl = async () => [{ name: 'second' }];
+    listCommandsImpl = async () => [{ name: 'second' }];
     await useCommandsStore.getState().loadCommands();
     const secondCommands = useCommandsStore.getState().commands;
     pending.resolve([{ name: 'first' }]);
@@ -186,34 +190,34 @@ describe('useCommandsStore', () => {
     expect(selectCommandsForDirectory(useCommandsStore.getState(), activeProjectPath)).toEqual([]);
     expect(useCommandsStore.getState().commands).toEqual([]);
     await useCommandsStore.getState().loadCommands();
-    expect(listCommandsWithDetailsCalls).toBe(1);
+    expect(listCommandsCalls).toBe(1);
   });
 
 
   test('a failed first load cannot copy the previous project and can recover on retry', async () => {
     const otherCommands = [{ name: 'other-only' }];
     useCommandsStore.setState({ commands: otherCommands, commandsByDirectory: { '/workspace/other': otherCommands } });
-    listCommandsWithDetailsImpl = async () => { throw new Error('unavailable'); };
+    listCommandsImpl = async () => { throw new Error('unavailable'); };
     expect(await useCommandsStore.getState().loadCommands()).toBe(false);
     expect(useCommandsStore.getState().commands).toEqual([]);
     expect(useCommandsStore.getState().commandsByDirectory[activeProjectPath]).toBeUndefined();
     expect(selectCommandsForDirectory(useCommandsStore.getState(), '/workspace/other')).toBe(otherCommands);
 
-    listCommandsWithDetailsImpl = async () => [{ name: 'recovered' }];
+    listCommandsImpl = async () => [{ name: 'recovered' }];
     expect(await useCommandsStore.getState().loadCommands()).toBe(true);
     expect(selectCommandsForDirectory(useCommandsStore.getState(), activeProjectPath).map(c => c.name)).toEqual(['recovered']);
   });
 
   test('an in-flight settings load becomes the active mirror if its project is selected', async () => {
     const pending = deferred<Command[]>();
-    listCommandsWithDetailsImpl = () => pending.promise;
+    listCommandsImpl = () => pending.promise;
     const settingsLoad = useCommandsStore.getState().loadCommands('/workspace/other');
     activeProjectPath = '/workspace/other';
     const activeLoad = useCommandsStore.getState().loadCommands();
     pending.resolve([{ name: 'selected' }]);
     expect(await settingsLoad).toBe(true);
     expect(await activeLoad).toBe(true);
-    expect(listCommandsWithDetailsCalls).toBe(1);
+    expect(listCommandsCalls).toBe(1);
     expect(useCommandsStore.getState().commands.map(c => c.name)).toEqual(['selected']);
   });
 

@@ -14,7 +14,7 @@
 
 import type { ContextPartMetadata } from "@/lib/messages/contextParts"
 import { create } from "zustand"
-import type { Session, Part, TextPart } from "@opencode-ai/sdk/v2/client"
+import type { Metadata, ModelRef, Part, Session, TextPart } from "@/lib/opencode/model"
 import type { AttachedFile, SessionContextUsage, SessionWorktreeAttachment } from "@/stores/types/sessionTypes"
 import type { WorktreeMetadata } from "@/types/worktree"
 import { opencodeClient } from "@/lib/opencode/client"
@@ -56,6 +56,7 @@ import { markSessionViewed } from "./notification-store"
 import { setActiveSession } from "./sync-context"
 import {
   createSession as createSessionAction,
+  type SessionCreateSelection,
   deleteSession as deleteSessionAction,
   deleteSessions as deleteSessionsAction,
   archiveSession as archiveSessionAction,
@@ -63,12 +64,9 @@ import {
   unarchiveSession as unarchiveSessionAction,
   unarchiveSessions as unarchiveSessionsAction,
   updateSessionTitle as updateSessionTitleAction,
-  shareSession as shareSessionAction,
-  unshareSession as unshareSessionAction,
   optimisticSend,
   refetchSessionMessages,
   revertToMessage as revertToMessageAction,
-  unrevertSession as unrevertSessionAction,
   forkFromMessage as forkFromMessageAction,
   fetchMessagesForSession,
   type ArchiveSessionsOptions,
@@ -131,6 +129,39 @@ export function expandSlashCommandGoalObjective(content: string, commands: GoalC
 // Send routing — shell mode, slash commands, or normal prompt
 // ---------------------------------------------------------------------------
 
+/**
+ * The model and agent a send has to switch the session to, or nothing.
+ *
+ * OpenCode 2.x keeps the selection on the session: `session.model` and
+ * `session.agent` are what the next turn runs on. Passing the composer's
+ * current pick on every prompt would re-switch the session constantly and
+ * write a switch record into the transcript, so only a difference from the
+ * session's own record travels.
+ */
+/**
+ * The model/agent a send has to switch the session to, or nothing when the
+ * session already runs on the desired selection. Sending them on every turn
+ * would make OpenCode record a switch (and two round trips) each time.
+ */
+export function resolveSendSelection(
+  sessionId: string,
+  directory: string | undefined,
+  desired: { providerID: string; modelID: string; variant?: string; agent?: string },
+): { model?: ModelRef; agent?: string } {
+  const sessions = getDirectoryState(directory)?.session ?? getAllSyncSessions()
+  const session = sessions.find((candidate) => candidate.id === sessionId)
+  const model: ModelRef = { providerID: desired.providerID, id: desired.modelID, variant: desired.variant }
+  const modelChanged = !session?.model
+    || session.model.providerID !== model.providerID
+    || session.model.id !== model.id
+    || session.model.variant !== model.variant
+  const agentChanged = Boolean(desired.agent) && session?.agent !== desired.agent
+  return {
+    model: modelChanged ? model : undefined,
+    agent: agentChanged ? desired.agent : undefined,
+  }
+}
+
 export async function routeMessage(params: {
   runtimeKey?: string
   sessionId: string
@@ -148,15 +179,22 @@ export async function routeMessage(params: {
   delivery?: 'steer'
 }): Promise<'command' | 'prompt' | 'shell'> {
   const requestDirectory = params.directory ?? undefined
-  let promptContent = params.content
+  // The session carries its own model and agent server-side. Sending them on
+  // every turn would switch the session to whatever the composer happens to
+  // show, so only a genuine change travels with the prompt.
+  const selection = resolveSendSelection(params.sessionId, requestDirectory, {
+    providerID: params.providerID,
+    modelID: params.modelID,
+    variant: params.variant,
+    agent: params.agent,
+  })
+  const promptContent = params.content
   let promptAdditionalParts = params.additionalParts
   if (params.inputMode === "shell") {
     await opencodeClient.shellSession({
       runtimeKey: params.runtimeKey,
       sessionId: params.sessionId,
       directory: requestDirectory,
-      agent: params.agent ?? "",
-      model: { providerID: params.providerID, modelID: params.modelID },
       command: params.content,
     })
     return 'shell'
@@ -187,39 +225,29 @@ export async function routeMessage(params: {
         part.systemContext !== 'session-knowledge'
       )) ?? false
       if (!additionalPartsRequirePrompt) {
-        await optimisticSend({
+        // `session.command` assigns the message id itself, so there is no id to
+        // hang an optimistic user message on. The command's message arrives
+        // through the stream instead.
+        params.appendSubmissions?.()
+        await opencodeClient.sendCommand({
           runtimeKey: params.runtimeKey,
-          sessionId: params.sessionId,
-          content: params.content,
-          providerID: params.providerID,
-          modelID: params.modelID,
-          agent: params.agent,
-          directory: requestDirectory,
+          id: params.sessionId,
+          model: selection.model,
+          agent: selection.agent,
+          command: cmdName,
+          arguments: tail.join(" "),
           files: params.files,
-          appendSubmissions: params.appendSubmissions,
-          send: (messageID) => opencodeClient.sendCommand({
-            runtimeKey: params.runtimeKey,
-            id: params.sessionId,
-            providerID: params.providerID,
-            modelID: params.modelID,
-            command: cmdName,
-            arguments: tail.join(" "),
-            agent: params.agent,
-            variant: params.variant,
-            files: params.files,
-            messageId: messageID,
-            directory: requestDirectory,
-          }).then(() => {}),
+          delivery: params.delivery,
+          directory: requestDirectory,
         })
         return 'command'
       }
 
-      // session.command accepts file parts only. Keep structured context on
-      // the prompt route, expanding templates locally when available and
-      // preserving skill invocation as an explicit synthetic instruction.
-      if (matchedCommand?.template?.trim()) {
-        promptContent = expandSlashCommandGoalObjective(params.content, [matchedCommand])
-      }
+      // `session.command` accepts file parts only, so a turn carrying
+      // structured context takes the prompt route. OpenCode 2.x no longer
+      // exposes command templates over HTTP, so the invocation travels as the
+      // user typed it; a skill keeps its semantics through an explicit
+      // context instruction.
       if (matchedSkill) {
         promptAdditionalParts = [
           ...(params.additionalParts ?? []),
@@ -233,32 +261,31 @@ export async function routeMessage(params: {
   }
 
   // Normal prompt — optimistic insert so message appears instantly
+  // A context item becomes a synthetic message, which carries text only. Any
+  // file it brought rides with the prompt so the attachment still arrives.
+  const contextItems = (promptAdditionalParts ?? [])
+    .filter((part) => part.text.trim().length > 0)
+    .map((part) => ({ text: part.text, metadata: part.metadata }))
+  const contextFiles = (promptAdditionalParts ?? []).flatMap((part) => part.files ?? [])
+  const promptFiles = [...(params.files ?? []), ...contextFiles]
+
   await optimisticSend({
     runtimeKey: params.runtimeKey,
     sessionId: params.sessionId,
     content: params.content,
-    providerID: params.providerID,
-    modelID: params.modelID,
-    agent: params.agent,
     directory: requestDirectory,
-    files: params.files,
+    files: promptFiles,
     appendSubmissions: params.appendSubmissions,
     send: (messageID) => opencodeClient.sendMessage({
       runtimeKey: params.runtimeKey,
       id: params.sessionId,
       providerID: params.providerID,
-      modelID: params.modelID,
+      model: selection.model,
+      agent: selection.agent,
       text: promptContent,
-      agent: params.agent,
       agentMentions: params.agentMentionName ? [{ name: params.agentMentionName }] : undefined,
-      variant: params.variant,
-      files: params.files,
-      additionalParts: promptAdditionalParts?.map((part) => ({
-        text: part.text,
-        synthetic: part.synthetic,
-        metadata: part.metadata,
-        files: part.files,
-      })),
+      files: promptFiles,
+      context: contextItems.length > 0 ? contextItems : undefined,
       delivery: params.delivery,
       messageId: messageID,
       directory: requestDirectory,
@@ -416,8 +443,8 @@ export type SessionUIState = {
   createSession: (
     title?: string,
     directoryOverride?: string | null,
-    parentID?: string | null,
-    metadata?: Record<string, unknown>,
+    metadata?: Metadata,
+    selection?: SessionCreateSelection,
   ) => Promise<Session | null>
   deleteSession: (id: string, options?: DeleteSessionOptions) => Promise<boolean>
   deleteSessions: (ids: string[], options?: DeleteSessionsOptions) => Promise<{ deletedIds: string[]; failedIds: string[] }>
@@ -426,12 +453,10 @@ export type SessionUIState = {
   unarchiveSession: (id: string) => Promise<boolean>
   unarchiveSessions: (ids: string[], options?: UnarchiveSessionsOptions) => Promise<{ restoredIds: string[]; failedIds: string[] }>
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>
-  shareSession: (sessionId: string) => Promise<Session | null>
-  unshareSession: (sessionId: string) => Promise<Session | null>
   revertToMessage: (sessionId: string, messageId: string, options?: { skipRedoPush?: boolean }) => Promise<void>
   forkFromMessage: (sessionId: string, messageId: string) => Promise<void>
   handleSlashUndo: (sessionId: string) => Promise<void>
-  handleSlashRedo: (sessionId: string, options?: { fullUnrevert?: boolean }) => Promise<void>
+  handleSlashRedo: (sessionId: string) => Promise<void>
   createSessionFromAssistantMessage: (source: AssistantMessageSessionSource, execution: AssistantMessageSessionExecution) => Promise<void>
 
   // Data access helpers (read from sync)
@@ -793,9 +818,9 @@ const recoverStaleDraftDirectory = async (openedDraft: NewSessionDraftState): Pr
 const createSessionWithDraftLifecycle = async (
   title?: string,
   directoryOverride?: string | null,
-  parentID?: string | null,
-  metadata?: Record<string, unknown>,
+  metadata?: Metadata,
   selectionTransition?: "submitted-draft",
+  selection?: SessionCreateSelection,
 ): Promise<Session | null> => {
   const store = useSessionUIStore.getState()
   const draft = store.newSessionDraft
@@ -805,13 +830,7 @@ const createSessionWithDraftLifecycle = async (
     const resolved = await resolveCreatableDraftDirectory(draft, directoryOverride)
     if (resolved.status === "aborted") return null
     const directory = resolved.directory
-    const session = await createSessionAction(
-      title,
-      directory,
-      parentID ?? null,
-      metadata,
-      selectionTransition,
-    )
+    const session = await createSessionAction(title, directory, metadata, selectionTransition, selection)
     if (!session) return null
 
     useSessionUIStore.getState().closeNewSessionDraft()
@@ -892,14 +911,20 @@ export async function materializeOpenDraftSession(selection: {
   await waitForWorktreeBootstrapIfConfigured(draftDirectoryOverride, draftProjectId)
 
   const draftPins = draft.projectContextPins ?? { notes: [], plans: [] }
+  // The draft already knows what the first turn runs on, so the session is
+  // created on that model and agent instead of being switched by the first
+  // send — a switch v2 would record in the transcript.
   const created = await createSessionWithDraftLifecycle(
     draft.title,
     draftDirectoryOverride,
-    draft.parentID ?? null,
     draftPins.notes.length > 0 || draftPins.plans.length > 0
       ? { openchamber: { project_context_pins: draftPins } }
       : undefined,
     "submitted-draft",
+    {
+      model: { providerID: selection.providerID, id: selection.modelID, variant: selection.variant },
+      agent: trimmedAgent,
+    },
   )
   if (!created?.id) {
     if (isChatDraft && draftDirectoryOverride) {
@@ -1675,17 +1700,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         const directoryCommands = getDirectoryState(goalDirectory ?? undefined)?.command ?? []
         const storedCommands = useCommandsStore.getState().commands
         const knownCommands = [...directoryCommands, ...storedCommands]
+        // OpenCode 2.x serves commands without their templates, so an
+        // unknown command's raw invocation stays the objective.
         objective = expandSlashCommandGoalObjective(content, knownCommands)
-        if (objective === content) {
-          try {
-            objective = expandSlashCommandGoalObjective(
-              content,
-              await opencodeClient.listCommandsWithDetails(goalDirectory),
-            )
-          } catch {
-            // Command dispatch remains authoritative; raw invocation is a safe objective fallback.
-          }
-        }
       }
       try {
         await setSessionGoal(goalSessionId, goalDirectory ?? undefined, { objective, tokenBudget }, null)
@@ -1898,8 +1915,8 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // ---------------------------------------------------------------------------
   // createSession
   // ---------------------------------------------------------------------------
-  createSession: (title, directoryOverride, parentID, metadata) =>
-    createSessionWithDraftLifecycle(title, directoryOverride, parentID, metadata),
+  createSession: (title, directoryOverride, metadata, selection) =>
+    createSessionWithDraftLifecycle(title, directoryOverride, metadata, undefined, selection),
 
   // ---------------------------------------------------------------------------
   // deleteSession — calls SDK, SSE event updates child store
@@ -1925,14 +1942,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // ---------------------------------------------------------------------------
   updateSessionTitle: async (sessionId, title) => {
     await updateSessionTitleAction(sessionId, title)
-  },
-
-  shareSession: async (sessionId) => {
-    return shareSessionAction(sessionId)
-  },
-
-  unshareSession: async (sessionId) => {
-    return unshareSessionAction(sessionId)
   },
 
   // ---------------------------------------------------------------------------
@@ -1988,17 +1997,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // ---------------------------------------------------------------------------
   // handleSlashRedo — moves the authoritative revert marker forward
   // ---------------------------------------------------------------------------
-  handleSlashRedo: async (sessionId, options) => {
-    if (options?.fullUnrevert) {
-      const { unrevertSession } = await import("./session-actions")
-      await unrevertSession(sessionId)
-      const { toast } = await import("sonner")
-      const { useI18nStore, formatMessage } = await import("@/lib/i18n/store")
-      const { dictionary } = useI18nStore.getState()
-      toast.success(formatMessage(dictionary, "chat.revert.toast.restored"))
-      return
-    }
-
+  handleSlashRedo: async (sessionId) => {
     const sessions = getSyncSessions()
     const currentSession = sessions.find((s) => s.id === sessionId)
     const revertToId = currentSession?.revert?.messageID
@@ -2016,14 +2015,9 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       const { useI18nStore, formatMessage } = await import("@/lib/i18n/store")
       const { dictionary } = useI18nStore.getState()
       toast.success(formatMessage(dictionary, "chat.revert.toast.redo"))
-      return
     }
-
-    await unrevertSessionAction(sessionId)
-    const { toast } = await import("sonner")
-    const { useI18nStore, formatMessage } = await import("@/lib/i18n/store")
-    const { dictionary } = useI18nStore.getState()
-    toast.success(formatMessage(dictionary, "chat.revert.toast.restored"))
+    // A committed revert has no server-side undo in OpenCode 2.x: once the
+    // marker is at the newest user message there is nothing further to redo.
   },
 
   // ---------------------------------------------------------------------------
@@ -2111,7 +2105,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
       }
     }
 
-    const session = await get().createSession(undefined, sessionDirectory, null)
+    const session = await get().createSession(undefined, sessionDirectory)
     if (!session) {
       if (createdWorktree && createdWorktreeProject) {
         const { removeProjectWorktree } = await import("@/lib/worktrees/worktreeManager")

@@ -1,3 +1,17 @@
+import {
+  isEditTool,
+  isPatchTool,
+  isShellTool,
+  isSubagentTool,
+  isWriteTool,
+} from '@/lib/opencode/tools';
+
+/** v2 file tools report `path`; the other keys cover MCP and plugin tools. */
+const readInputPath = (input: Record<string, unknown> | undefined): string | null => {
+  const value = input?.path ?? input?.filePath ?? input?.file_path ?? input?.sourcePath;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+};
+
 export interface ToolMetadata {
   displayName: string;
   icon?: string;
@@ -18,7 +32,7 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
     category: 'file',
     outputLanguage: 'auto',
     inputFields: [
-      { key: 'filePath', label: 'File Path', type: 'file' },
+      { key: 'path', label: 'File Path', type: 'file' },
       { key: 'offset', label: 'Start Line', type: 'text' },
       { key: 'limit', label: 'Lines to Read', type: 'text' }
     ]
@@ -28,7 +42,7 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
     category: 'file',
     outputLanguage: 'auto',
     inputFields: [
-      { key: 'filePath', label: 'File Path', type: 'file' },
+      { key: 'path', label: 'File Path', type: 'file' },
       { key: 'content', label: 'Content', type: 'code' }
     ]
   },
@@ -37,22 +51,13 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
     category: 'file',
     outputLanguage: 'diff',
     inputFields: [
-      { key: 'filePath', label: 'File Path', type: 'file' },
+      { key: 'path', label: 'File Path', type: 'file' },
       { key: 'oldString', label: 'Find', type: 'code' },
       { key: 'newString', label: 'Replace', type: 'code' },
       { key: 'replaceAll', label: 'Replace All', type: 'text' }
     ]
   },
-  multiedit: {
-    displayName: 'Multi-Edit',
-    category: 'file',
-    outputLanguage: 'diff',
-    inputFields: [
-      { key: 'filePath', label: 'File Path', type: 'file' },
-      { key: 'edits', label: 'Edits', type: 'code', language: 'json' }
-    ]
-  },
-  apply_patch: {
+  patch: {
     displayName: 'Apply Patch',
     category: 'file',
     outputLanguage: 'diff',
@@ -61,13 +66,13 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
     ]
   },
 
-  bash: {
+  shell: {
     displayName: 'Shell Command',
     category: 'system',
     outputLanguage: 'text',
     inputFields: [
       { key: 'command', label: 'Command', type: 'command', language: 'bash' },
-      { key: 'description', label: 'Description', type: 'text' },
+      { key: 'workdir', label: 'Working Directory', type: 'file' },
       { key: 'timeout', label: 'Timeout (ms)', type: 'text' }
     ]
   },
@@ -91,24 +96,14 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
       { key: 'path', label: 'Directory', type: 'file' }
     ]
   },
-  list: {
-    displayName: 'List Directory',
-    category: 'file',
-    outputLanguage: 'text',
-    inputFields: [
-      { key: 'path', label: 'Directory', type: 'file' },
-      { key: 'ignore', label: 'Ignore Patterns', type: 'pattern' }
-    ]
-  },
-
-    task: {
+  subagent: {
     displayName: 'Agent Task',
     category: 'ai',
     outputLanguage: 'markdown',
     inputFields: [
       { key: 'description', label: 'Task', type: 'text' },
       { key: 'prompt', label: 'Instructions', type: 'text' },
-      { key: 'subagent_type', label: 'Agent Type', type: 'text' }
+      { key: 'agent', label: 'Agent', type: 'text' }
     ]
   },
 
@@ -143,20 +138,6 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
      ]
    },
 
-   todowrite: {
-     displayName: 'Update Todo List',
-     category: 'system',
-     outputLanguage: 'json',
-     inputFields: [
-       { key: 'todos', label: 'Todo Items', type: 'code', language: 'json' }
-     ]
-   },
-   todoread: {
-     displayName: 'Read Todo List',
-     category: 'system',
-     outputLanguage: 'json',
-     inputFields: []
-   },
    skill: {
      displayName: 'Load Skill',
      category: 'ai',
@@ -173,19 +154,6 @@ const TOOL_METADATA: Record<string, ToolMetadata> = {
          { key: 'questions', label: 'Questions', type: 'code', language: 'json' }
        ]
      },
-
-    lsp: {
-      displayName: 'LSP',
-      category: 'code',
-      outputLanguage: 'json',
-      inputFields: [
-        { key: 'operation', label: 'Operation', type: 'text' },
-        { key: 'filePath', label: 'File Path', type: 'file' },
-        { key: 'line', label: 'Line', type: 'text' },
-        { key: 'character', label: 'Character', type: 'text' },
-        { key: 'query', label: 'Query', type: 'text' }
-      ]
-    },
 
     openchamber: {
       displayName: 'OpenChamber',
@@ -263,8 +231,8 @@ export function detectToolOutputLanguage(
 
   if (metadata.outputLanguage === 'auto') {
 
-    if (input?.filePath || input?.file_path || input?.sourcePath) {
-      const filePath = (input.filePath || input.file_path || input.sourcePath) as string;
+    const filePath = readInputPath(input);
+    if (filePath) {
       const language = getLanguageFromExtension(filePath);
       if (language) return language;
     }
@@ -821,53 +789,33 @@ export function formatToolInput(input: Record<string, unknown>, toolName: string
     return typeof val === 'string' ? val : (typeof val === 'number' ? String(val) : null);
   };
 
-  if (toolName === 'bash') {
+  if (isShellTool(toolName)) {
     const cmd = getString('command');
     if (cmd) return cmd;
   }
 
-  if (toolName === 'lsp') {
-    const operation = getString('operation') || 'lsp';
-    const filePath = getString('filePath') || getString('file_path') || getString('path');
-    const line = getString('line');
-    const character = getString('character');
-    const query = getString('query');
-    const position = line && character ? ` (Line: ${line}; Character: ${character})` : '';
-
-    if (operation === 'workspaceSymbol') {
-      return query ? `Operation: ${operation} (Query: "${query}")` : `Operation: ${operation}`;
-    }
-
-    const summary = `Operation: ${operation}${position}`;
-    if (filePath) {
-      return `${summary}\n${filePath}`;
-    }
-
-    return summary;
-  }
-
-  if (toolName === 'task') {
+  if (isSubagentTool(toolName)) {
     const prompt = getString('prompt');
     if (prompt) return prompt;
     const desc = getString('description');
     if (desc) return desc;
   }
 
-  if (toolName === 'apply_patch' && typeof input === 'object') {
+  if (isPatchTool(toolName) && typeof input === 'object') {
     const patchText = getString('patchText') || getString('patch_text') || getString('patch');
     if (patchText) {
       return patchText;
     }
   }
 
-  if ((toolName === 'edit' || toolName === 'multiedit') && typeof input === 'object') {
-    const filePath = getString('filePath') || getString('file_path') || getString('path');
+  if (isEditTool(toolName) && typeof input === 'object') {
+    const filePath = readInputPath(input);
     if (filePath) {
       return `File path: ${filePath}`;
     }
   }
 
-  if (toolName === 'write' && typeof input === 'object') {
+  if (isWriteTool(toolName) && typeof input === 'object') {
 
     const content = getString('content');
     if (content) {

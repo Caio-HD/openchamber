@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react"
-import type { Message, Part } from "@opencode-ai/sdk/v2/client"
+import type { Message, Part } from "@/lib/opencode/model"
+import { opencodeClient } from "@/lib/opencode/client"
 import { Binary } from "./binary"
 import { upsertSessionRecord } from "./session-records"
 import { retry } from "./retry"
@@ -49,34 +50,7 @@ const syncSessionInflightByKey = new Map<string, Promise<void>>()
 // to the store. This prevents rapid session switches (e.g. 1→2→3 in the
 // sidebar) from having each completed fetch fight for focus.
 const syncSessionGenerationByKey = new Map<string, number>()
-type SdkResult<T> = {
-  data?: T
-  error?: unknown
-  response?: {
-    status?: number
-    headers?: { get?: (name: string) => string | null }
-  }
-}
 
-function formatSdkError(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  if (error && typeof error === "object") {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === "string" && message.length > 0) return message
-  }
-  try {
-    return JSON.stringify(error)
-  } catch {
-    return String(error)
-  }
-}
-
-function assertSdkSuccess<T>(result: SdkResult<T>, operation: string): void {
-  if (!result.error) return
-  const status = result.response?.status
-  throw new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`)
-}
 
 const isConstrainedSessionRuntime = () => isVSCodeRuntime() || isMobileSurfaceRuntime()
 const getEffectiveSessionCacheLimit = () => {
@@ -95,11 +69,7 @@ function isHeavyConstrainedSessionCache(state: Pick<State, "message" | "part">, 
   return messages.length > getInitialMessagePageSize()
 }
 
-function isUserMessage(message: Message): boolean {
-  const info = message as Message & { clientRole?: unknown; role?: unknown }
-  const role = typeof info.clientRole === "string" ? info.clientRole : info.role
-  return role === "user"
-}
+const isUserMessage = (message: Message): boolean => message.role === "user"
 
 export function hasUserMessage(messages: Message[] | undefined): boolean {
   return Boolean(messages?.some(isUserMessage))
@@ -127,10 +97,8 @@ function useSessionCacheTouch() {
         message: { ...current.message },
         part: { ...current.part },
         session_status: { ...current.session_status },
-        session_diff: { ...current.session_diff },
-        todo: { ...current.todo },
         permission: { ...current.permission },
-        question: { ...current.question },
+        form: { ...current.form },
       }
       dropSessionCaches(draft, sessionIDs)
       dropCachedSessionMessageRecordsSnapshots(store, sessionIDs)
@@ -209,7 +177,7 @@ export function useSync() {
         includePermissions: false,
       })
       if (getRuntimeKey() !== runtimeKey) return false
-      return (targetStore.getState().question[sessionID]?.length ?? 0) > 0
+      return (targetStore.getState().form[sessionID]?.length ?? 0) > 0
     },
     [childStores, directory, runtimeKey],
   )
@@ -258,13 +226,9 @@ export function useSync() {
           shouldFetchSession
             ? (async () => {
                 try {
-                  const result = await retry(async () => {
-                    const response = await sdk.session.get({ sessionID, directory: targetDirectory })
-                    assertSdkSuccess(response, "session.get")
-                    return response
-                  })
-                  if (result.data && !isStale()) {
-                    const nextSession = stripSessionDiffSnapshots(result.data)
+                  const session = await retry(() => opencodeClient.getSession(sessionID, targetDirectory))
+                  if (!isStale()) {
+                    const nextSession = stripSessionDiffSnapshots(session)
                     const s = targetStore.getState()
                     const sessions = upsertSessionRecord(s.session, nextSession)
                     if (sessions !== s.session && !isStale()) {

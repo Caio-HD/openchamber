@@ -384,8 +384,12 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
       oauthClientSecret: '',
       oauthScope: '',
       oauthRedirectUri: '',
-      timeout: '',
-      enabled: true,
+      oauthCallbackPort: '',
+      timeoutStartup: '',
+      timeoutCatalog: '',
+      timeoutExecution: '',
+      codemode: false,
+      disabled: false,
     };
 
     setMcpDraft(draft);

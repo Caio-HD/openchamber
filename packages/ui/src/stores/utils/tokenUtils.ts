@@ -1,4 +1,4 @@
-import type { Message, Part } from "@opencode-ai/sdk/v2";
+import type { Message, Part } from "@/lib/opencode/model";
 
 type TokenBreakdown = {
     /** Server-reported window of the turn's final round-trip. Optional in the schema; absent on older servers. */

@@ -88,7 +88,10 @@ export function createPermissionAutoAcceptRuntime({
     if (!info || typeof info.id !== 'string' || !info.id) return;
     sessions.set(info.id, {
       parentID: typeof info.parentID === 'string' && info.parentID ? info.parentID : null,
-      directory: typeof info.directory === 'string' && info.directory ? info.directory : directoryHint,
+      // v2 keeps the directory on `location`; translated events already flatten it.
+      directory: typeof info.directory === 'string' && info.directory
+        ? info.directory
+        : (typeof info.location?.directory === 'string' && info.location.directory ? info.location.directory : directoryHint),
     });
     if (sessions.size > SESSION_CACHE_LIMIT) {
       sessions.delete(sessions.keys().next().value);
@@ -119,7 +122,7 @@ export function createPermissionAutoAcceptRuntime({
   const getSession = async (sessionId, directory) => {
     const cached = sessions.get(sessionId);
     if (cached) return cached;
-    const info = await request(`/session/${encodeURIComponent(sessionId)}`, { directory });
+    const info = await request(`/api/session/${encodeURIComponent(sessionId)}`, { directory });
     rememberSession(info?.data ?? info, directory);
     return sessions.get(sessionId) ?? null;
   };
@@ -148,7 +151,8 @@ export function createPermissionAutoAcceptRuntime({
     if (!permission?.id || !permission?.sessionID) return false;
     await load();
     if (!(await isSessionAutoAccepting(permission.sessionID, directory))) return false;
-    await request(`/permission/${encodeURIComponent(permission.id)}/reply`, {
+    // v2 scopes a permission reply under its session.
+    await request(`/api/session/${encodeURIComponent(permission.sessionID)}/permission/${encodeURIComponent(permission.id)}/reply`, {
       directory,
       method: 'POST',
       body: { reply: 'once' },
@@ -190,7 +194,7 @@ export function createPermissionAutoAcceptRuntime({
       for (const directory of scopes) {
         let payload;
         try {
-          payload = await request('/permission', { directory });
+          payload = await request('/api/permission/request', { directory });
         } catch {
           continue;
         }
@@ -209,15 +213,17 @@ export function createPermissionAutoAcceptRuntime({
   }
 
   const processEvent = (event) => {
-    const raw = event?.payload;
-    const payload = raw?.payload && typeof raw.payload === 'object' ? raw.payload : raw;
     const directory = typeof event?.directory === 'string' && event.directory !== 'global' ? event.directory : undefined;
-    if (payload?.type === 'session.created' || payload?.type === 'session.updated') {
-      rememberSession(payload.properties?.info, directory);
-      return;
-    }
-    if (payload?.type === 'permission.asked') {
-      void processPermission(payload.properties, directory);
+    for (const payload of event?.translated?.() ?? []) {
+      if (payload.type === 'session.created' || payload.type === 'session.updated') {
+        rememberSession(payload.properties?.info, directory ?? payload.properties?.directory);
+        continue;
+      }
+      // A v2 permission request is `{ id, sessionID, action, resources, ... }`;
+      // only the id and session id are used to reply.
+      if (payload.type === 'permission.asked') {
+        void processPermission(payload.properties, directory ?? payload.properties?.directory);
+      }
     }
   };
 

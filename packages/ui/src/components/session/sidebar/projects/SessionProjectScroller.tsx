@@ -42,7 +42,6 @@ type SessionProjectScrollerGroupProps = Pick<SessionGroupSectionProps,
   | 'notifyOnSubtasks'
   | 'expandedParents'
   | 'editTitle'
-  | 'copiedSessionId'
   | 'folderRename'
   | 'setFolderRenameDraft'
   | 'clearFolderRename'
@@ -58,7 +57,6 @@ type SessionProjectScrollerGroupProps = Pick<SessionGroupSectionProps,
   | 'deleteSessionConfirm'
   | 'setDeleteSessionConfirm'
   | 'startFolderRename'
-  | 'setCopiedSessionId'
   | 'startSessionWorktreeMenuLoad'
 > & {
   pinnedSessionIds: Set<string>;

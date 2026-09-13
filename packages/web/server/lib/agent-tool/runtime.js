@@ -1,5 +1,3 @@
-import { pathToFileURL } from 'node:url';
-import { appendManagedPlugin } from '../opencode/managed-plugin-config.js';
 import {
   OPENCHAMBER_AGENT_TOOL_ACTION_DEFINITIONS,
   OPENCHAMBER_AGENT_TOOL_ACTIONS,
@@ -11,6 +9,7 @@ import {
 } from '../openchamber-control/actions.js';
 
 const TOOL_SCHEMA_VERSION = 1;
+const PLUGIN_ID = 'openchamber-agent-tool';
 // Everything either managed tool may ask for; the agent allowlist stays
 // narrower than the full control surface.
 const ACTIONS = new Set([...OPENCHAMBER_AGENT_TOOL_ACTIONS, ...OPENCHAMBER_WEB_ACTIONS, ...OPENCHAMBER_MEMORY_ACTIONS]);
@@ -143,12 +142,25 @@ const isLoopbackAddress = (value) => {
  * set, the inputs and the description differ. Generating them from one template
  * keeps the transport, metadata and failure handling identical, which is what
  * the caller depends on.
+ *
+ * OpenCode 2 takes a tool's `input` as plain JSON Schema, so the generated file
+ * needs no imports at all — which it must not have, because OpenCode loads the
+ * entrypoint with a bare dynamic import and nothing resolves from the generated
+ * directory.
  */
-const createToolEntry = ({ name, description, actions, definitions, parameters }) => String.raw`    ${name}: {
+const createToolEntry = ({ name, description, actions, definitions, parameters }) => String.raw`    tools.add({
+      name: ${JSON.stringify(name)},
       description: ${JSON.stringify(description)},
-      args: {
-        action: { type: "string", enum: ${JSON.stringify(actions)}, oneOf: ${JSON.stringify(definitions.map((entry) => ({ const: entry.action, description: entry.description })))}, description: "OpenChamber action to perform" },
-        parameters: { type: "object", properties: ${JSON.stringify(parameters)}, additionalProperties: false, description: "Inputs for the action; use an empty object when none are needed" },
+      input: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ${JSON.stringify(actions)}, oneOf: ${JSON.stringify(definitions.map((entry) => ({ const: entry.action, description: entry.description })))}, description: "OpenChamber action to perform" },
+          parameters: { type: "object", properties: ${JSON.stringify(parameters)}, additionalProperties: false, description: "Inputs for the action; use an empty object when none are needed" },
+        },
+        required: ["action"],
+        // Models routinely put the inputs next to the action; the schema has to
+        // let that reach execute() instead of rejecting the call.
+        additionalProperties: true,
       },
       async execute(input, context) {
         // Models routinely put the inputs next to the action instead of inside
@@ -159,21 +171,22 @@ const createToolEntry = ({ name, description, actions, definitions, parameters }
         const args = { ...flattened, ...(parameters ?? {}), action: requestedAction }
         const actionTitles = ${JSON.stringify(AGENT_TOOL_ACTION_TITLES)}
         const title = Object.hasOwn(actionTitles, args.action) ? actionTitles[args.action] : args.action
-        context.metadata({
-          title,
-          metadata: {
-            ${name}: {
-              schemaVersion: ${TOOL_SCHEMA_VERSION},
-              action: args.action,
-              description: title,
-            },
+        const progress = (extra) => context.progress({
+          ${name}: {
+            schemaVersion: ${TOOL_SCHEMA_VERSION},
+            action: args.action,
+            description: title,
+            ...extra,
           },
         })
+        await progress()
         const endpoint = process.env.OPENCHAMBER_AGENT_TOOL_URL
         const token = process.env.OPENCHAMBER_AGENT_TOOL_TOKEN
+        // No output schema is declared, so a result must never carry an output
+        // field: OpenCode rejects that with "Tool result declared output
+        // without an output schema". The envelope travels as text content.
         const failure = (payload) => ({
-          title,
-          output: JSON.stringify(payload),
+          content: JSON.stringify(payload),
           metadata: { openchamber: { schemaVersion: ${TOOL_SCHEMA_VERSION}, action: args.action, description: title, ok: false } },
         })
         if (!endpoint || !token) {
@@ -187,32 +200,23 @@ const createToolEntry = ({ name, description, actions, definitions, parameters }
               authorization: "Bearer " + token,
               "content-type": "application/json",
             },
-            body: JSON.stringify({ input: args, contextDirectory: context.directory, tool: ${JSON.stringify(name)} }),
-            signal: context.abort,
+            // OpenCode 2 no longer hands a tool its session directory, so the
+            // session id goes over instead and OpenChamber resolves the
+            // directory on its own side.
+            body: JSON.stringify({ input: args, sessionID: context.sessionID, tool: ${JSON.stringify(name)} }),
           })
-          const output = await response.text()
+          const content = await response.text()
           let result = null
-          try { result = JSON.parse(output) } catch {}
+          try { result = JSON.parse(content) } catch {}
           const valid = result?.schemaVersion === ${TOOL_SCHEMA_VERSION} && typeof result?.ok === "boolean" && typeof result?.action === "string"
-          context.metadata({
-            title,
-            metadata: {
-              ${name}: {
-                schemaVersion: ${TOOL_SCHEMA_VERSION},
-                action: args.action,
-                description: title,
-                ok: valid && result.ok === true,
-              },
-            },
-          })
-          if (valid) return { title, output, metadata: { openchamber: { schemaVersion: ${TOOL_SCHEMA_VERSION}, action: args.action, description: title, ok: result.ok === true } } }
+          await progress({ ok: valid && result.ok === true })
+          if (valid) return { content, metadata: { openchamber: { schemaVersion: ${TOOL_SCHEMA_VERSION}, action: args.action, description: title, ok: result.ok === true } } }
           return failure({ schemaVersion: ${TOOL_SCHEMA_VERSION}, ok: false, action: args.action, error: { message: "OpenChamber returned an invalid response", kind: "runtime", status: response.status } })
         } catch (error) {
-          if (context.abort.aborted) throw error
           return failure({ schemaVersion: ${TOOL_SCHEMA_VERSION}, ok: false, action: args.action, error: { message: error instanceof Error ? error.message : String(error), kind: "runtime" } })
         }
       },
-    },
+    })
 `;
 
 const createPluginSource = ({ includeControl, includeWeb, includeMemory }) => {
@@ -245,12 +249,25 @@ const createPluginSource = ({ includeControl, includeWeb, includeMemory }) => {
     }));
   }
 
-  return `export const OpenChamberPlugin = async () => ({
-  tool: {
-${entries.join('')}  },
-})
+  return `export default {
+  id: ${JSON.stringify(PLUGIN_ID)},
+  setup: async (ctx) => {
+    await ctx.tool.transform((tools) => {
+${entries.join('')}    })
+  },
+}
 `;
 };
+
+// A configured plugin has to be a directory carrying a package.json that
+// resolves an entrypoint; OpenCode skips a plain .js path.
+const PLUGIN_PACKAGE_JSON = `${JSON.stringify({
+  name: 'openchamber-agent-tool',
+  version: '0.0.0',
+  private: true,
+  type: 'module',
+  exports: { '.': './index.js' },
+}, null, 2)}\n`;
 
 export const createAgentToolRuntime = (dependencies) => {
   const {
@@ -260,26 +277,45 @@ export const createAgentToolRuntime = (dependencies) => {
     dataDir,
     getActivePort,
     executeAction,
-    env = process.env,
+    resolveSessionDirectory,
   } = dependencies;
-  const pluginDirectory = path.join(dataDir, 'agent-tool');
-  const pluginPath = path.join(pluginDirectory, 'openchamber-plugin.js');
+  const pluginRoot = path.join(dataDir, 'agent-tool');
+  const pluginDirectory = path.join(pluginRoot, PLUGIN_ID);
+  const pluginPath = path.join(pluginDirectory, 'index.js');
+  const pluginManifestPath = path.join(pluginDirectory, 'package.json');
   let activeToken = null;
 
-  const prepareManagedOpenCodeEnv = async ({ includeControl = true, includeWeb = true, includeMemory = true } = {}) => {
-    const port = getActivePort();
-    if (!Number.isInteger(port) || port <= 0) {
-      throw new Error('OpenChamber listener port is unavailable for managed tool injection');
-    }
+  /**
+   * Write the plugin for the requested tool set and return its directory.
+   *
+   * Called both before a managed child starts and whenever the tool settings
+   * change while it runs, so the source on disk always matches the settings —
+   * the running OpenCode reloads the directory it already has configured.
+   */
+  const materializePlugin = async ({ includeControl = true, includeWeb = true, includeMemory = true } = {}) => {
     if (!includeControl && !includeWeb && !includeMemory) {
       throw new Error('At least one OpenChamber managed tool must be enabled to inject the plugin');
     }
     await fsPromises.mkdir(pluginDirectory, { recursive: true });
+    await fsPromises.writeFile(pluginManifestPath, PLUGIN_PACKAGE_JSON, { mode: 0o600 });
     await fsPromises.writeFile(pluginPath, createPluginSource({ includeControl, includeWeb, includeMemory }), { mode: 0o600 });
+    return pluginDirectory;
+  };
+
+  /**
+   * Callback URL and a fresh per-child token for a managed OpenCode process.
+   *
+   * These are always part of the child environment, including when every tool
+   * is currently off: a tool switched on later reaches a process that already
+   * knows where and how to call back, so the toggle needs no restart.
+   */
+  const createChildEnv = () => {
+    const port = getActivePort();
+    if (!Number.isInteger(port) || port <= 0) {
+      throw new Error('OpenChamber listener port is unavailable for managed tool injection');
+    }
     activeToken = crypto.randomBytes(32).toString('base64url');
-    const pluginUrl = pathToFileURL(pluginPath).href;
     return {
-      OPENCODE_CONFIG_CONTENT: appendManagedPlugin(env.OPENCODE_CONFIG_CONTENT, pluginUrl, 'managed tool'),
       OPENCHAMBER_AGENT_TOOL_URL: `http://127.0.0.1:${port}/api/openchamber/agent-tool`,
       OPENCHAMBER_AGENT_TOOL_TOKEN: activeToken,
     };
@@ -310,8 +346,18 @@ export const createAgentToolRuntime = (dependencies) => {
     if (typeof executeAction !== 'function') {
       return createResult({ ok: false, action, error: { message: 'OpenChamber control service is unavailable', kind: 'runtime' } });
     }
+    // OpenCode 2 tools no longer receive a directory, so the plugin sends the
+    // session id and the directory is resolved here. An unresolvable session
+    // falls through with no directory, exactly like the old "no directory" path.
+    let contextDirectory = asNonEmptyString(payload.contextDirectory) ?? undefined;
+    const sessionID = asNonEmptyString(payload.sessionID);
+    if (!contextDirectory && sessionID && typeof resolveSessionDirectory === 'function') {
+      contextDirectory = await Promise.resolve(resolveSessionDirectory(sessionID))
+        .then((value) => asNonEmptyString(value) ?? undefined)
+        .catch(() => undefined);
+    }
     try {
-      const data = await executeAction(action, { ...payload.input, action }, payload.contextDirectory, options);
+      const data = await executeAction(action, { ...payload.input, action }, contextDirectory, options);
       return createResult({ ok: true, action, data });
     } catch (error) {
       return createResult({
@@ -331,6 +377,28 @@ export const createAgentToolRuntime = (dependencies) => {
     }
   };
 
+  // In-flight actions per session. OpenCode 2 gives a plugin tool no abort
+  // signal, so the plugin's request stays open after the user cancels the
+  // turn; the server learns about the cancel from the event stream instead
+  // (`session.idle` with `aborted: true`) and aborts the actions itself.
+  const inflightBySession = new Map();
+  const trackInflight = (sessionID, controller) => {
+    if (!sessionID) return () => {};
+    const set = inflightBySession.get(sessionID) ?? new Set();
+    set.add(controller);
+    inflightBySession.set(sessionID, set);
+    return () => {
+      set.delete(controller);
+      if (set.size === 0) inflightBySession.delete(sessionID);
+    };
+  };
+  const abortSession = (sessionID) => {
+    const set = inflightBySession.get(asNonEmptyString(sessionID));
+    if (!set) return 0;
+    for (const controller of set) controller.abort();
+    return set.size;
+  };
+
   const registerRoutes = (app, express) => {
     app.post('/api/openchamber/agent-tool', express.json({ limit: '1mb' }), async (req, res) => {
       if (!authorize(req)) return res.status(401).json({ error: 'Unauthorized' });
@@ -340,6 +408,7 @@ export const createAgentToolRuntime = (dependencies) => {
       };
       req.once('aborted', abortOnDisconnect);
       res.once('close', abortOnDisconnect);
+      const untrack = trackInflight(asNonEmptyString(req.body?.sessionID), controller);
       try {
         return res.json(await execute(req.body, { signal: controller.signal }));
       } catch (error) {
@@ -349,6 +418,7 @@ export const createAgentToolRuntime = (dependencies) => {
           error: { message: error instanceof Error ? error.message : String(error), kind: 'runtime' },
         }));
       } finally {
+        untrack();
         req.off('aborted', abortOnDisconnect);
         res.off('close', abortOnDisconnect);
       }
@@ -356,8 +426,11 @@ export const createAgentToolRuntime = (dependencies) => {
   };
 
   return {
-    prepareManagedOpenCodeEnv,
+    pluginDirectory,
+    materializePlugin,
+    createChildEnv,
     registerRoutes,
     execute,
+    abortSession,
   };
 };

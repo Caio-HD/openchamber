@@ -2,7 +2,7 @@ import { DirectoryActionIndicator } from '../sessions/DirectoryActionIndicator';
 import React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useShallow } from 'zustand/react/shallow';
-import type { Session } from '@opencode-ai/sdk/v2';
+import type { Session } from '@/lib/opencode/model';
 
 // Archived buckets routinely grow into the hundreds/thousands; virtualize
 // when we cross this row count so the DOM stays bounded.
@@ -79,7 +79,6 @@ export type SessionGroupSectionProps = {
   expandedParents: Set<string>;
   editingId: string | null;
   editTitle: string;
-  copiedSessionId: string | null;
   openSidebarMenuKey: string | null;
   onToggleCollapsedGroup: (groupKey: string) => void;
   dragHandleProps?: SortableDragHandleProps | null;
@@ -108,7 +107,6 @@ export type SessionGroupSectionProps = {
   | 'deleteSessionConfirm'
   | 'setDeleteSessionConfirm'
   | 'startFolderRename'
-  | 'setCopiedSessionId'
   | 'startSessionWorktreeMenuLoad'
 >;
 
@@ -205,10 +203,6 @@ const areGroupPropsEqual = (prev: SessionGroupSectionProps, next: SessionGroupSe
     return false;
   }
   if (prev.editTitle !== next.editTitle && groupContainsSessionId(next.group, next.editingId)) return false;
-  if (prev.copiedSessionId !== next.copiedSessionId
-    && (groupContainsSessionId(next.group, prev.copiedSessionId) || groupContainsSessionId(next.group, next.copiedSessionId))) {
-    return false;
-  }
   if (prev.openSidebarMenuKey !== next.openSidebarMenuKey) {
     const archived = next.group.isArchivedBucket === true;
     const previousMenuSessionId = resolveMenuOpenSessionId(next.group.sessions, prev.openSidebarMenuKey, 'project', archived);
@@ -254,7 +248,6 @@ const areGroupPropsEqual = (prev: SessionGroupSectionProps, next: SessionGroupSe
     && prev.deleteSessionConfirm === next.deleteSessionConfirm
     && prev.setDeleteSessionConfirm === next.setDeleteSessionConfirm
     && prev.startFolderRename === next.startFolderRename
-    && prev.setCopiedSessionId === next.setCopiedSessionId
     && prev.startSessionWorktreeMenuLoad === next.startSessionWorktreeMenuLoad
     && prev.setFolderRenameDraft === next.setFolderRenameDraft
     && prev.clearFolderRename === next.clearFolderRename
@@ -294,7 +287,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     editingId,
     openSidebarMenuKey,
     editTitle,
-    copiedSessionId,
     folderRename,
     setFolderRenameDraft,
     clearFolderRename,
@@ -836,7 +828,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
               notifyOnSubtasks={notifyOnSubtasks}
               editingId={editingId}
                editTitle={editTitle}
-               copiedSessionId={copiedSessionId}
               openSidebarMenuKey={openSidebarMenuKey}
               mobileVariant={mobileVariant}
               alwaysShowActions={alwaysShowActions}
@@ -857,7 +848,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                deleteSessionConfirm={props.deleteSessionConfirm}
               setDeleteSessionConfirm={props.setDeleteSessionConfirm}
               startFolderRename={props.startFolderRename}
-              setCopiedSessionId={props.setCopiedSessionId}
               startSessionWorktreeMenuLoad={props.startSessionWorktreeMenuLoad}
              />)}
           </SessionFolderItem>
@@ -956,7 +946,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     notifyOnSubtasks={notifyOnSubtasks}
     editingId={editingId}
      editTitle={editTitle}
-     copiedSessionId={copiedSessionId}
     openSidebarMenuKey={openSidebarMenuKey}
     mobileVariant={mobileVariant}
     alwaysShowActions={alwaysShowActions}
@@ -977,7 +966,6 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
      deleteSessionConfirm={props.deleteSessionConfirm}
      setDeleteSessionConfirm={props.setDeleteSessionConfirm}
      startFolderRename={props.startFolderRename}
-     setCopiedSessionId={props.setCopiedSessionId}
      startSessionWorktreeMenuLoad={props.startSessionWorktreeMenuLoad}
    />;
 

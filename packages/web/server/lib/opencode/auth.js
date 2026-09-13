@@ -1,11 +1,26 @@
+/**
+ * READ-ONLY view of OpenCode's provider credentials.
+ *
+ * OpenCode 2.x imports the legacy `auth.json` once into its own database and
+ * never writes the file again; credentials live behind `/api/integration` and
+ * `/api/credential`, and there is no HTTP route that hands a key back.
+ * OpenChamber needs the raw credential for provider quota lookups, voice keys
+ * and the GitHub and Linear helpers, so `readAuthFile()` answers from two
+ * sources: the database OpenCode actually uses (`credential-db.js`), with the
+ * legacy file underneath for anything the database does not know. The shape
+ * is the legacy `auth.json` map either way. Nothing here writes: a write
+ * would be invisible to the running OpenCode and drift from what it uses.
+ */
+
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { readCredentialsFromDb, resolveCredentialDbPath } from './credential-db.js';
 
 const OPENCODE_DATA_DIR = path.join(os.homedir(), '.local', 'share', 'opencode');
 const AUTH_FILE = path.join(OPENCODE_DATA_DIR, 'auth.json');
 
-function readAuthFile() {
+function readLegacyAuthFile() {
   if (!fs.existsSync(AUTH_FILE)) {
     return {};
   }
@@ -22,45 +37,14 @@ function readAuthFile() {
   }
 }
 
-function writeAuthFile(auth) {
-  try {
-    if (!fs.existsSync(OPENCODE_DATA_DIR)) {
-      fs.mkdirSync(OPENCODE_DATA_DIR, { recursive: true, mode: 0o700 });
-    }
-    if (process.platform !== 'win32') fs.chmodSync(OPENCODE_DATA_DIR, 0o700);
-
-    if (fs.existsSync(AUTH_FILE)) {
-      const backupFile = `${AUTH_FILE}.openchamber.backup`;
-      fs.copyFileSync(AUTH_FILE, backupFile);
-      if (process.platform !== 'win32') fs.chmodSync(backupFile, 0o600);
-      console.log(`Created auth backup: ${backupFile}`);
-    }
-
-    fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), { encoding: 'utf8', mode: 0o600 });
-    if (process.platform !== 'win32') fs.chmodSync(AUTH_FILE, 0o600);
-    console.log('Successfully wrote auth file');
-  } catch (error) {
-    console.error('Failed to write auth file:', error);
-    throw new Error('Failed to write OpenCode auth configuration');
-  }
-}
-
-function removeProviderAuth(providerId) {
-  if (!providerId || typeof providerId !== 'string') {
-    throw new Error('Provider ID is required');
-  }
-
-  const auth = readAuthFile();
-  
-  if (!auth[providerId]) {
-    console.log(`Provider ${providerId} not found in auth file, nothing to remove`);
-    return false;
-  }
-
-  delete auth[providerId];
-  writeAuthFile(auth);
-  console.log(`Removed provider auth: ${providerId}`);
-  return true;
+/** The credentials OpenCode uses, keyed by provider id, in the legacy entry shape. */
+function readAuthFile() {
+  const legacy = readLegacyAuthFile();
+  const stored = readCredentialsFromDb({
+    dbPath: resolveCredentialDbPath({ dataDir: OPENCODE_DATA_DIR, path }),
+    fs,
+  });
+  return stored ? { ...legacy, ...stored } : legacy;
 }
 
 function getProviderAuth(providerId) {
@@ -75,8 +59,6 @@ function listProviderAuths() {
 
 export {
   readAuthFile,
-  writeAuthFile,
-  removeProviderAuth,
   getProviderAuth,
   listProviderAuths,
   AUTH_FILE,

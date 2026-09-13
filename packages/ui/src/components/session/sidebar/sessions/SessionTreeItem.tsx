@@ -23,7 +23,6 @@ type SessionTreeItemRenderProps = Context & Pick<SessionNodeItemProps,
   | 'notifyOnSubtasks'
   | 'editingId'
   | 'editTitle'
-  | 'copiedSessionId'
   | 'openSidebarMenuKey'
   | 'mobileVariant'
   | 'alwaysShowActions'
@@ -50,7 +49,6 @@ export type SessionTreeItemProps = SessionTreeItemRenderProps & Pick<SessionNode
   deleteSessionConfirm: DeleteSessionConfirmState;
   setDeleteSessionConfirm: (value: DeleteSessionConfirmState) => void;
   startFolderRename: (scopeKey: string, folder: { id: string; name: string }) => void;
-  setCopiedSessionId: (sessionId: string | null) => void;
 };
 
 const EMPTY_SUBTREE_CONTAINS_EDITING: Set<string> = new Set();
@@ -87,8 +85,6 @@ export function SessionTreeItem({
   deleteSessionConfirm,
   setDeleteSessionConfirm,
   startFolderRename,
-  copiedSessionId,
-  setCopiedSessionId,
   startSessionWorktreeMenuLoad,
   mobileVariant,
   alwaysShowActions,
@@ -137,8 +133,6 @@ export function SessionTreeItem({
     setEditingId,
     editTitle,
     setEditTitle,
-    copiedSessionId,
-    setCopiedSessionId,
   });
   const childRenderExtrasFor = renderExtras?.childRenderExtrasFor;
   const childContext: Context = {
@@ -162,11 +156,7 @@ export function SessionTreeItem({
       toggleParent={toggleParent}
        handleSessionSelect={sessionActions.handleSessionSelect}
        handleSessionDoubleClick={sessionActions.handleSessionDoubleClick}
-       handleShareSession={sessionActions.handleShareSession}
-       copiedSessionId={copiedSessionId}
-       handleCopyShareUrl={sessionActions.handleCopyShareUrl}
        handleCopySessionId={sessionActions.handleCopySessionId}
-       handleUnshareSession={sessionActions.handleUnshareSession}
       openSidebarMenuKey={openSidebarMenuKey}
       setOpenSidebarMenuKey={setOpenSidebarMenuKey}
       createFolderAndStartRename={createFolderAndStartRename}
@@ -200,7 +190,6 @@ export function SessionTreeItem({
           editingId={editingId}
           setEditingId={setEditingId}
            editTitle={editTitle}
-           copiedSessionId={copiedSessionId}
           setEditTitle={setEditTitle}
            toggleParent={toggleParent}
            openSidebarMenuKey={openSidebarMenuKey}
@@ -214,7 +203,6 @@ export function SessionTreeItem({
            deleteSessionConfirm={deleteSessionConfirm}
            setDeleteSessionConfirm={setDeleteSessionConfirm}
             startFolderRename={startFolderRename}
-            setCopiedSessionId={setCopiedSessionId}
             startSessionWorktreeMenuLoad={startSessionWorktreeMenuLoad}
            mobileVariant={mobileVariant}
            alwaysShowActions={alwaysShowActions}

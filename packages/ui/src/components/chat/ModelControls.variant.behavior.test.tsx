@@ -37,7 +37,7 @@ const model = {
   variants: { low: {}, high: {} },
 };
 const provider = { id: PROVIDER_ID, name: PROVIDER_ID, models: [model] };
-const agent = { name: AGENT, mode: 'primary' as const };
+const agent = { id: AGENT, name: AGENT, displayName: AGENT, mode: 'primary' as const, hidden: false, request: { settings: {}, headers: {}, body: {} }, permissions: [] };
 
 let latestUserChoice: UserModelChoice | null = null;
 let forcePreserveManualOverride: boolean | null = null;
@@ -205,9 +205,13 @@ mock.module('@/stores/contextStore', () => ({
   useContextStore: <T,>(selector: (state: { hasHydrated: boolean }) => T): T => selector({ hasHydrated: true }),
 }));
 
+// The session record the composer restores its selection from; a test sets
+// it to drive the "open a historical session" path.
+let sessionRecord: { id: string; agent?: string; model?: { providerID: string; id: string; variant?: string } } | undefined;
 mock.module('@/sync/sync-context', () => ({
   useSessionMessages: () => [],
   useSessionRenderable: () => true,
+  useSession: () => sessionRecord,
 }));
 mock.module('@/sync/use-sync', () => ({ useSync: () => ({ sessions: [] }) }));
 mock.module('@/sync/sync-refs', () => ({ getSyncParts: () => [] }));
@@ -338,6 +342,7 @@ describe('ModelControls effort restore', () => {
     variantWrites.length = 0;
     overrideWrites.length = 0;
     latestUserChoice = null;
+    sessionRecord = undefined;
     forcePreserveManualOverride = null;
     useSessionUIStore.setState({ currentSessionId: SESSION_ID });
     useUIStore.setState({ isMobile: false, isModelSelectorOpen: false });
@@ -369,6 +374,36 @@ describe('ModelControls effort restore', () => {
       expect(variantWrites).not.toContain(null);
       expect(useSelectionStore.getState().savedVariant).toBe('low');
       expect(useConfigStore.getState().currentVariantSelection.override).toBe('low');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('restores the effort the session record carries, before any transcript is loaded', async () => {
+    // OpenCode 2 keeps model, variant and agent on the session itself; a
+    // historical session opens on that selection even when its messages
+    // are not in memory yet and the last reply says nothing.
+    sessionRecord = { id: SESSION_ID, agent: AGENT, model: { providerID: PROVIDER_ID, id: MODEL_ID, variant: 'high' } };
+    latestUserChoice = null;
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(variantWrites).toContain('high');
+      expect(useSelectionStore.getState().savedVariant).toBe('high');
+      expect(useConfigStore.getState().currentVariantSelection.override).toBe('high');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test('the session record outranks an older reply in the transcript', async () => {
+    sessionRecord = { id: SESSION_ID, agent: AGENT, model: { providerID: PROVIDER_ID, id: MODEL_ID, variant: 'high' } };
+    latestUserChoice = { id: 'msg-1', agent: AGENT, providerID: PROVIDER_ID, modelID: MODEL_ID, variant: 'low' };
+
+    const { cleanup } = await renderModelControls();
+    try {
+      expect(useSelectionStore.getState().savedVariant).toBe('high');
+      expect(variantWrites).not.toContain('low');
     } finally {
       await cleanup();
     }

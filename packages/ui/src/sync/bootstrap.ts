@@ -1,4 +1,5 @@
-import type { OpencodeClient, PermissionRequest, Project, QuestionRequest } from "@opencode-ai/sdk/v2/client"
+import type { FormRequest, PermissionRequest, Project } from "@/lib/opencode/model"
+import { opencodeClient } from "@/lib/opencode/client"
 import { retry } from "./retry"
 import type { GlobalState, State } from "./types"
 import { runtimeFetch } from "../lib/runtime-fetch"
@@ -6,36 +7,6 @@ import { emitSyncConfigChanged } from "./sync-refs"
 import { warmChatsRootDirectory } from "../lib/chatDirectories"
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
-
-/**
- * SDK returns `{ data, error, response }` without throwing on non-2xx.
- * The silent `x.data!` / `x.data ?? []` pattern lets HTTP 5xx warmup
- * errors become empty state. Wrap into a real Error so retry() fires.
- */
-function unwrap<T>(
-  result: { data?: T; error?: unknown; response?: { status?: number } },
-  name: string,
-): T {
-  if (result.error) {
-    const rawError = result.error
-    const status = result.response?.status
-    const message = typeof rawError === "object" && rawError !== null && "message" in rawError
-      ? String((rawError as { message?: unknown }).message)
-      : String(rawError)
-    const err = new Error(`${name} failed${status ? ` (${status})` : ""}: ${message}`)
-    if (status !== undefined) {
-      ;(err as Error & { status?: number }).status = status
-    }
-    throw err
-  }
-  if (result.data === undefined) {
-    // No error + no data: ambiguous, treat as transient so retry fires.
-    const err = new Error(`${name} returned no data`)
-    ;(err as Error & { status?: number }).status = 503
-    throw err
-  }
-  return result.data
-}
 
 const requestSignature = (items: Array<{ id: string }> | undefined): string => {
   if (!items || items.length === 0) return ""
@@ -61,25 +32,51 @@ function projectID(directory: string, projects: Project[]) {
   )?.id
 }
 
+/**
+ * Replaces the per-session lists of pending requests with an authoritative
+ * fetch, keeping sessions whose list changed underneath the request (a live
+ * event landed while it was in flight) instead of clobbering them.
+ */
+function reconcilePendingRequests<T extends { id: string; sessionID: string }>(
+  before: Record<string, T[]>,
+  current: Record<string, T[]>,
+  fetched: T[],
+) {
+  const beforeSignatures = new Map(
+    Object.entries(before).map(([sessionID, items]) => [sessionID, requestSignature(items)]),
+  )
+  const grouped = groupBySession(fetched)
+  const merged = { ...current }
+  for (const [sessionID, items] of Object.entries(grouped)) {
+    merged[sessionID] = items.sort((a, b) => cmp(a.id, b.id))
+  }
+  for (const sessionID of beforeSignatures.keys()) {
+    if (grouped[sessionID]) continue
+    const beforeSignature = beforeSignatures.get(sessionID) ?? ""
+    const currentSignature = requestSignature(current[sessionID])
+    if (currentSignature !== beforeSignature) continue
+    delete merged[sessionID]
+  }
+  return merged
+}
+
 // ---------------------------------------------------------------------------
 // Bootstrap global state
 // ---------------------------------------------------------------------------
 
-export async function bootstrapGlobal(
-  sdk: OpencodeClient,
-  set: (patch: Partial<GlobalState>) => void,
-) {
+export async function bootstrapGlobal(set: (patch: Partial<GlobalState>) => void) {
   const results = await Promise.allSettled([
     // Sync chat classification needs the chats root before session lists load;
     // it resolves alongside the other bootstrap calls, not ahead of them.
     warmChatsRootDirectory(),
-    retry(() => sdk.path.get().then((x) => set({ path: unwrap(x, "path.get") }))),
-    retry(() => sdk.global.config.get().then((x) => set({ config: unwrap(x, "global.config.get") }))),
+    retry(async () => {
+      const [location, home] = await Promise.all([opencodeClient.getLocation(), opencodeClient.getFilesystemHome()])
+      set({ path: { directory: location.directory, worktree: location.project.directory, home: home ?? "" } })
+    }),
+    retry(() => opencodeClient.getConfig().then((config) => set({ config }))),
     retry(() =>
-      sdk.project.list().then((x) => {
-        const data = unwrap(x, "project.list")
+      opencodeClient.listProjects().then((data) => {
         const projects = data
-          .filter((p): p is Project => !!p?.id)
           .filter((p) => !!p.worktree && !p.worktree.includes("opencode-test"))
           .sort((a, b) => cmp(a.id, b.id))
         set({ projects })
@@ -99,7 +96,7 @@ export async function bootstrapGlobal(
   if (errors.length === results.length) {
     let message = errors[0] instanceof Error ? errors[0].message : String(errors[0])
     try {
-      const healthRes = await runtimeFetch('/health', { signal: AbortSignal.timeout(4000) })
+      const healthRes = await runtimeFetch("/health", { signal: AbortSignal.timeout(4000) })
       if (healthRes.ok) {
         const health = await healthRes.json()
         if (health.lastOpenCodeError) {
@@ -123,17 +120,17 @@ export async function bootstrapGlobal(
 
 export async function bootstrapDirectory(input: {
   directory: string
-  sdk: OpencodeClient
   getState: () => State
   set: (patch: Partial<State>) => void
   isStale?: () => boolean
   global: {
-    config: Record<string, unknown>
+    config: GlobalState["config"]
     projects: Project[]
+    path: GlobalState["path"]
   }
   loadSessions: (directory: string) => Promise<void> | void
 }): Promise<"complete" | "failed" | "stale"> {
-  const { directory, sdk, getState, set, global: g } = input
+  const { directory, getState, set, global: g } = input
   const commit = (patch: Partial<State>): boolean => {
     if (input.isStale?.()) return false
     set(patch)
@@ -146,8 +143,7 @@ export async function bootstrapDirectory(input: {
   const seededProject = projectID(directory, g.projects)
   if (seededProject) commit({ project: seededProject })
   if (Object.keys(state.config ?? {}).length === 0 && Object.keys(g.config ?? {}).length > 0) {
-    const seededConfig = g.config as State["config"]
-    if (commit({ config: seededConfig })) emitSyncConfigChanged(directory, seededConfig)
+    if (commit({ config: g.config })) emitSyncConfigChanged(directory, g.config)
   }
   if (loading) commit({ status: "partial" })
   if (input.isStale?.()) return "stale"
@@ -157,22 +153,24 @@ export async function bootstrapDirectory(input: {
   // These are the minimum data needed to show a functional chat interface.
   // ---------------------------------------------------------------------------
   const phase1Results = await Promise.allSettled([
-    seededProject
-      ? Promise.resolve()
-      : retry(() => sdk.project.current().then((x) => commit({ project: unwrap(x, "project.current").id }))),
-    retry(() => sdk.config.get().then((x) => {
-      const config = unwrap(x, "config.get")
-      if (commit({ config })) emitSyncConfigChanged(directory, config)
-    })),
     retry(() =>
-      sdk.path.get().then((x) => {
-        const data = unwrap(x, "path.get")
-        commit({ path: data })
-        const next = projectID(data?.directory ?? directory, g.projects)
-        if (next) commit({ project: next })
+      opencodeClient.getLocation(directory).then((location) => {
+        commit({
+          project: location.project.id,
+          path: { directory: location.directory, worktree: location.project.directory, home: g.path.home },
+        })
       }),
     ),
-    retry(() => sdk.session.status().then((x) => commit({ session_status: unwrap(x, "session.status"), sessionStatusReady: true }))),
+    retry(() =>
+      opencodeClient.getConfig(directory).then((config) => {
+        if (commit({ config })) emitSyncConfigChanged(directory, config)
+      }),
+    ),
+    retry(async () => {
+      const statuses = await opencodeClient.getActiveSessionStatuses()
+      if (statuses === null) throw new Error("session.active failed")
+      commit({ session_status: statuses, sessionStatusReady: true })
+    }),
   ])
 
   if (input.isStale?.()) return "stale"
@@ -184,16 +182,14 @@ export async function bootstrapDirectory(input: {
   // De-block the UI: only a total failure (OpenCode genuinely unreachable)
   // should abort the directory. Don't let one transient initial fetch strand
   // the directory in "loading" forever and skip phase 2/3 (sessions).
-  //   - session.status is LIVE data the event pipeline keeps current — a failed
-  //     initial snapshot is harmless; SSE will deliver the real status.
-  //   - path.get feeds project resolution, but if we already resolved a project
-  //     (from global projects) its failure is tolerable; the worktree path is
-  //     refreshed by later events.
-  const [, , pathResult] = phase1Results
-  const pathFailedWithoutProject =
-    pathResult.status === "rejected" && !getState().project
+  //   - session.active is LIVE data the event pipeline keeps current — a failed
+  //     initial snapshot is harmless; the stream will deliver the real status.
+  //   - location feeds project resolution, but if we already resolved a project
+  //     (from global projects) its failure is tolerable.
+  const [locationResult] = phase1Results
+  const locationFailedWithoutProject = locationResult.status === "rejected" && !getState().project
 
-  if (phase1Errors.length === phase1Results.length || pathFailedWithoutProject) {
+  if (phase1Errors.length === phase1Results.length || locationFailedWithoutProject) {
     console.error(`[bootstrap] directory bootstrap failed for ${directory}`, phase1Errors[0])
     return "failed"
   }
@@ -206,79 +202,24 @@ export async function bootstrapDirectory(input: {
   // These enrich the UI but aren't required for basic functionality.
   // ---------------------------------------------------------------------------
   const runDeferredPhase = () => Promise.allSettled([
-    retry(() => sdk.command.list().then((x) => commit({ command: unwrap(x, "command.list") }))),
-    retry(() => sdk.mcp.status().then((x) => commit({ mcp: unwrap(x, "mcp.status") }))),
-    retry(() => sdk.lsp.status().then((x) => commit({ lsp: unwrap(x, "lsp.status") }))),
+    retry(() => opencodeClient.listCommands(directory).then((command) => commit({ command }))),
     retry(() =>
-      sdk.vcs.get().then((x) => {
-        const current = getState()
-        if (x.error) {
-          throw new Error(`vcs.get failed: ${String(x.error)}`)
-        }
-        commit({ vcs: x.data ?? current.vcs })
+      opencodeClient.listMcpServers(directory).then((servers) => {
+        commit({ mcp: Object.fromEntries(servers.map((server) => [server.name, server])) })
       }),
     ),
+    retry(() => opencodeClient.getVcs(directory).then((vcs) => commit({ vcs }))),
     retry(async () => {
       const before = getState()
-      const beforeSignatures = new Map(
-        Object.entries(before.question ?? {}).map(([sessionID, questions]) => [sessionID, requestSignature(questions)]),
-      )
-      const x = await sdk.question.list(directory ? { directory } : undefined)
-      if (x.error) {
-        const status = (x as { response?: { status?: number } }).response?.status
-        const err = new Error(`question.list failed${status ? ` (${status})` : ""}: ${String(x.error)}`)
-        if (status !== undefined) (err as Error & { status?: number }).status = status
-        throw err
-      }
-      const grouped = groupBySession(
-        (x.data ?? []).filter((q): q is QuestionRequest => !!q?.id && !!q.sessionID),
-      )
+      const forms: FormRequest[] = await opencodeClient.listPendingForms({ directories: [directory] })
       const current = getState()
-      const merged = { ...current.question }
-      for (const [sessionID, questions] of Object.entries(grouped)) {
-        merged[sessionID] = questions
-          .filter((q) => !!q?.id)
-          .sort((a, b) => cmp(a.id, b.id))
-      }
-      for (const sessionID of beforeSignatures.keys()) {
-        if (grouped[sessionID]) continue
-        const beforeSignature = beforeSignatures.get(sessionID) ?? ""
-        const currentSignature = requestSignature(current.question[sessionID])
-        if (currentSignature !== beforeSignature) continue
-        delete merged[sessionID]
-      }
-      commit({ question: merged })
+      commit({ form: reconcilePendingRequests(before.form ?? {}, current.form, forms) })
     }),
     retry(async () => {
       const before = getState()
-      const beforeSignatures = new Map(
-        Object.entries(before.permission ?? {}).map(([sessionID, permissions]) => [sessionID, requestSignature(permissions)]),
-      )
-      const x = await sdk.permission.list(directory ? { directory } : undefined)
-      if (x.error) {
-        const status = (x as { response?: { status?: number } }).response?.status
-        const err = new Error(`permission.list failed${status ? ` (${status})` : ""}: ${String(x.error)}`)
-        if (status !== undefined) (err as Error & { status?: number }).status = status
-        throw err
-      }
-      const grouped = groupBySession(
-        (x.data ?? []).filter((perm): perm is PermissionRequest => !!perm?.id && !!perm?.sessionID),
-      )
+      const permissions: PermissionRequest[] = await opencodeClient.listPendingPermissions({ directories: [directory] })
       const current = getState()
-      const merged = { ...current.permission }
-      for (const [sessionID, perms] of Object.entries(grouped)) {
-        merged[sessionID] = perms
-          .filter((p) => !!p?.id)
-          .sort((a, b) => cmp(a.id, b.id))
-      }
-      for (const sessionID of beforeSignatures.keys()) {
-        if (grouped[sessionID]) continue
-        const beforeSignature = beforeSignatures.get(sessionID) ?? ""
-        const currentSignature = requestSignature(current.permission[sessionID])
-        if (currentSignature !== beforeSignature) continue
-        delete merged[sessionID]
-      }
-      commit({ permission: merged })
+      commit({ permission: reconcilePendingRequests(before.permission ?? {}, current.permission, permissions) })
     }),
   ]).then((results) => {
     const errors = results

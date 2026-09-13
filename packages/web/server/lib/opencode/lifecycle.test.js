@@ -206,7 +206,7 @@ describe('OpenCode lifecycle', () => {
     await runtime.restartOpenCode();
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://seamus:4095/global/health',
+      'http://seamus:4095/api/health',
       expect.objectContaining({ method: 'GET' }),
     );
     expect(runtime.testState.openCodePort).toBe(4095);
@@ -260,10 +260,10 @@ describe('OpenCode lifecycle', () => {
 
     const warmupUrls = fetchMock.mock.calls
       .map(([url]) => String(url))
-      .filter((url) => url.includes('/session/status'));
+      .filter((url) => url.includes('/api/session?'));
     expect(warmupUrls).toEqual([
-      'http://127.0.0.1:45678/session/status?directory=%2Ftmp%2Fworktree-a',
-      'http://127.0.0.1:45678/session/status?directory=%2Ftmp%2Fproject-b',
+      'http://127.0.0.1:45678/api/session?directory=%2Ftmp%2Fworktree-a&limit=1',
+      'http://127.0.0.1:45678/api/session?directory=%2Ftmp%2Fproject-b&limit=1',
     ]);
   });
 

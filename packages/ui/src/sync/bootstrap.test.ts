@@ -1,250 +1,152 @@
-import { describe, expect, test } from "bun:test"
-import type { OpencodeClient, Project, QuestionRequest } from "@opencode-ai/sdk/v2/client"
-import { bootstrapDirectory } from "./bootstrap"
+import { beforeEach, describe, expect, mock, test } from "bun:test"
+import type { FormRequest, Project } from "@/lib/opencode/model"
 import { INITIAL_STATE, type State } from "./types"
 
-const createSdk = (options?: {
-  commandList?: () => Promise<{ data: unknown[] }>
-  sessionStatus?: () => Promise<{ data: State['session_status'] }>
-  questionList?: () => Promise<{ data?: unknown[]; error?: unknown; response?: { status?: number } }>
-}) => ({
-  project: { current: async () => ({ data: { id: "project-a" } }) },
-  config: { get: async () => ({ data: {} }) },
-  path: { get: async () => ({ data: { state: "", config: "", worktree: "/repo", directory: "/repo", home: "/home" } }) },
-  session: { status: options?.sessionStatus ?? (async () => ({ data: {} })) },
-  command: { list: options?.commandList ?? (async () => ({ data: [] })) },
-  mcp: { status: async () => ({ data: {} }) },
-  lsp: { status: async () => ({ data: [] }) },
-  vcs: { get: async () => ({ data: { branch: "main" } }) },
-  question: { list: options?.questionList ?? (async () => ({ data: [] })) },
-  permission: { list: async () => ({ data: [] }) },
-}) as unknown as OpencodeClient
+type ClientStub = {
+  getLocation: () => Promise<{ directory: string; project: { id: string; directory: string; canonical: string } }>
+  getConfig: () => Promise<Record<string, never>>
+  getActiveSessionStatuses: () => Promise<State["session_status"] | null>
+  listCommands: () => Promise<unknown[]>
+  listMcpServers: () => Promise<unknown[]>
+  getVcs: () => Promise<{ branch: string }>
+  listPendingForms: () => Promise<FormRequest[]>
+  listPendingPermissions: () => Promise<unknown[]>
+  getFilesystemHome: () => Promise<string>
+  listProjects: () => Promise<Project[]>
+}
 
-const createState = (): State => ({
-  ...INITIAL_STATE,
-  message: {},
-  part: {},
+const client: ClientStub = {
+  getLocation: async () => ({ directory: "/repo", project: { id: "project-a", directory: "/repo", canonical: "/repo" } }),
+  getConfig: async () => ({}),
+  getActiveSessionStatuses: async () => ({}),
+  listCommands: async () => [],
+  listMcpServers: async () => [],
+  getVcs: async () => ({ branch: "main" }),
+  listPendingForms: async () => [],
+  listPendingPermissions: async () => [],
+  getFilesystemHome: async () => "/home",
+  listProjects: async () => [],
+}
+
+;(mock as unknown as { restore?: () => void }).restore?.()
+mock.module("@/lib/opencode/client", () => ({ opencodeClient: client }))
+mock.module("../lib/chatDirectories", () => ({ warmChatsRootDirectory: async () => undefined }))
+mock.module("../lib/runtime-fetch", () => ({ runtimeFetch: async () => new Response("{}", { status: 200 }) }))
+
+const { bootstrapDirectory } = await import(`./bootstrap?bootstrap-test=${Date.now()}`)
+
+const createState = (): State => ({ ...INITIAL_STATE, message: {}, part: {} })
+
+const project: Project = {
+  id: "project-a",
+  worktree: "/repo",
+  time: { created: 1, updated: 1 },
+  sandboxes: [],
+}
+
+const form = (id: string, sessionID: string, title = "Pick"): FormRequest => ({
+  id,
+  sessionID,
+  title,
+  fields: [{ key: "a", type: "boolean" }],
 })
 
-const project = { id: "project-a", worktree: "/repo" } as Project
+const run = (state: { current: State }, loadSessions: () => Promise<void> | void = async () => undefined) =>
+  bootstrapDirectory({
+    directory: "/repo",
+    getState: () => state.current,
+    set: (patch: Partial<State>) => {
+      state.current = { ...state.current, ...patch }
+    },
+    global: { config: {}, projects: [project], path: { directory: "", worktree: "", home: "/home" } },
+    loadSessions,
+  })
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+beforeEach(() => {
+  client.listCommands = async () => []
+  client.listPendingForms = async () => []
+  client.getActiveSessionStatuses = async () => ({})
+})
 
 describe("bootstrapDirectory", () => {
   test("prioritizes session loading without waiting for deferred fields", async () => {
-    let state = createState()
+    const state = { current: createState() }
     let deferredStarted = false
     let resolveDeferred!: () => void
-    const deferred = new Promise<{ data: unknown[] }>((resolve) => {
-      resolveDeferred = () => resolve({ data: [] })
+    const deferred = new Promise<unknown[]>((resolve) => {
+      resolveDeferred = () => resolve([])
     })
     let resolveSessions!: () => void
     const sessions = new Promise<void>((resolve) => {
       resolveSessions = resolve
     })
     let settled = false
-    const sdk = createSdk({
-      commandList: async () => {
-        deferredStarted = true
-        return deferred
-      },
-    })
-    const bootstrapping = bootstrapDirectory({
-      directory: "/repo",
-      sdk,
-      getState: () => state,
-      set: (patch) => {
-        state = { ...state, ...patch }
-      },
-      global: { config: {}, projects: [project] },
-      loadSessions: () => sessions,
-    }).then((result) => {
+    client.listCommands = async () => {
+      deferredStarted = true
+      return deferred
+    }
+    const bootstrapping = run(state, () => sessions).then((result: string) => {
       settled = true
       return result
     })
 
-    await Promise.resolve()
-    await Promise.resolve()
+    await tick()
+    expect(deferredStarted).toBe(false)
     expect(settled).toBe(false)
-    expect(deferredStarted).toBe(false)
-    resolveSessions()
+    expect(state.current.status).toBe("complete")
+    expect(state.current.project).toBe("project-a")
+    expect(state.current.path).toEqual({ directory: "/repo", worktree: "/repo", home: "/home" })
 
+    resolveSessions()
     expect(await bootstrapping).toBe("complete")
-    expect(state.status).toBe("complete")
-    expect(state.sessionStatusReady).toBe(true)
-    expect(deferredStarted).toBe(false)
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await tick()
     expect(deferredStarted).toBe(true)
     resolveDeferred()
   })
 
-  test("reports session-list failure without clearing existing state", async () => {
-    let state = { ...createState(), session: [{ id: "cached" }] as State["session"] }
-    const result = await bootstrapDirectory({
-      directory: "/repo",
-      sdk: createSdk(),
-      getState: () => state,
-      set: (patch) => {
-        state = { ...state, ...patch }
-      },
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => {
-        throw new Error("unavailable")
-      },
-    })
-
-    expect(result).toBe("failed")
-    expect(state.session.map((session) => session.id)).toEqual(["cached"])
+  test("a failed status snapshot leaves the prior status untouched", async () => {
+    const state = { current: { ...createState(), session_status: { ses_1: { type: "busy" as const } } } }
+    client.getActiveSessionStatuses = async () => null
+    expect(await run(state)).toBe("complete")
+    expect(state.current.session_status).toEqual({ ses_1: { type: "busy" } })
+    expect(state.current.sessionStatusReady).toBeUndefined()
   })
 
-  test("rejects stale work before committing", async () => {
-    const state = createState()
-    let commits = 0
-    const result = await bootstrapDirectory({
-      directory: "/repo",
-      sdk: createSdk(),
-      getState: () => state,
-      set: () => {
-        commits += 1
-      },
-      isStale: () => true,
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => undefined,
-    })
+  test("deferred phase merges fetched forms by session, replacing the pre-fetch record", async () => {
+    const state = { current: { ...createState(), form: { ses_1: [form("form_1", "ses_1")] } } }
+    const fetched = [form("form_2", "ses_1"), form("form_1", "ses_1", "Updated")]
+    client.listPendingForms = async () => fetched
 
-    expect(result).toBe("stale")
-    expect(commits).toBe(0)
+    await run(state)
+    await tick()
+
+    expect(state.current.form.ses_1?.map((f) => f.id)).toEqual(["form_1", "form_2"])
+    expect(state.current.form.ses_1?.[0]?.title).toBe("Updated")
   })
 
-  test("a failed status request cannot grant idle authority even when bootstrap completes", async () => {
-    let state = createState()
-    const result = await bootstrapDirectory({
-      directory: '/repo',
-      sdk: createSdk({ sessionStatus: async () => { throw new Error('status unavailable') } }),
-      getState: () => state,
-      set: (patch) => { state = { ...state, ...patch } },
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => undefined,
-    })
-    expect(result).toBe('complete')
-    expect(state.sessionStatusReady).toBe(undefined)
+  test("deferred phase deletes a session's forms when they disappear and nothing changed meanwhile", async () => {
+    const state = { current: { ...createState(), form: { ses_1: [form("form_1", "ses_1")], ses_2: [form("form_3", "ses_2")] } } }
+    client.listPendingForms = async () => []
+
+    await run(state)
+    await tick()
+
+    expect(state.current.form).toEqual({})
   })
 
-  test("deferred phase merges fetched questions by session, replacing the pre-fetch record", async () => {
-    let state = createState()
-    const preExisting: QuestionRequest = { id: "que_1", sessionID: "ses_1", questions: [] }
-    const fetched: QuestionRequest[] = [
-      { id: "que_2", sessionID: "ses_1", questions: [] },
-      {
-        id: "que_1",
-        sessionID: "ses_1",
-        questions: [{ question: "updated?", header: "Build", options: [{ label: "Yes", description: "Go" }] }],
-      },
-    ]
-    state = { ...state, question: { ses_1: [preExisting] } }
-    const sdk = createSdk({ questionList: async () => ({ data: fetched }) })
-
-    await bootstrapDirectory({
-      directory: "/repo",
-      sdk,
-      getState: () => state,
-      set: (patch) => { state = { ...state, ...patch } },
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => undefined,
-    })
-    // Deferred phase runs on a setTimeout(0); give it a tick.
-    await new Promise((resolve) => setTimeout(resolve, 20))
-
-    // The fetched (sorted) records replace the pre-fetch snapshot entirely.
-    expect(state.question["ses_1"]?.map((q) => q.id)).toEqual(["que_1", "que_2"])
-    expect(state.question["ses_1"]?.[0]?.questions).toEqual(fetched[1].questions)
-  })
-
-  test("deferred phase deletes a session's questions when they disappear and the signature is unchanged", async () => {
-    let state = createState()
-    const que1: QuestionRequest = { id: "que_1", sessionID: "ses_1", questions: [] }
-    const que3: QuestionRequest = { id: "que_3", sessionID: "ses_2", questions: [] }
-    state = {
-      ...state,
-      question: {
-        ses_1: [que1],
-        ses_2: [que3],
-      },
+  test("deferred phase preserves in-flight form changes when the signature changed", async () => {
+    const state = { current: { ...createState(), form: { ses_1: [form("form_1", "ses_1")] } } }
+    client.listPendingForms = async () => {
+      // A live event lands while the fetch is in flight.
+      state.current = { ...state.current, form: { ...state.current.form, ses_1: [form("form_1", "ses_1"), form("form_2", "ses_1")] } }
+      return []
     }
-    const sdk = createSdk({ questionList: async () => ({ data: [] }) })
 
-    await bootstrapDirectory({
-      directory: "/repo",
-      sdk,
-      getState: () => state,
-      set: (patch) => { state = { ...state, ...patch } },
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => undefined,
-    })
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await run(state)
+    await tick()
 
-    // Both sessions vanished from the fetched list and nothing changed in
-    // between, so the signature guard allows the delete.
-    expect(state.question).toEqual({})
-  })
-
-  test("deferred phase preserves in-flight question changes when the signature changed (stale guard)", async () => {
-    let state = createState()
-    const que1: QuestionRequest = { id: "que_1", sessionID: "ses_1", questions: [] }
-    const que2: QuestionRequest = { id: "que_2", sessionID: "ses_1", questions: [] }
-    state = { ...state, question: { ses_1: [que1] } }
-    const sdk = createSdk({
-      questionList: async () => {
-        // Simulate an event landing while the deferred fetch is in flight:
-        // the session gains a second question before the fetch resolves.
-        state = { ...state, question: { ...state.question, ses_1: [que1, que2] } }
-        return { data: [] }
-      },
-    })
-
-    await bootstrapDirectory({
-      directory: "/repo",
-      sdk,
-      getState: () => state,
-      set: (patch) => { state = { ...state, ...patch } },
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => undefined,
-    })
-    await new Promise((resolve) => setTimeout(resolve, 20))
-
-    // The fetched list is empty, but the in-flight change altered the
-    // signature, so the disappearance must NOT be treated as authoritative.
-    expect(state.question["ses_1"]?.map((q) => q.id)).toEqual(["que_1", "que_2"])
-  })
-
-  test("deferred phase retries a transient question.list failure and still merges", async () => {
-    let state = createState()
-    const que1: QuestionRequest = { id: "que_1", sessionID: "ses_1", questions: [] }
-    let calls = 0
-    let resolveSecondCall!: () => void
-    const secondCall = new Promise<void>((resolve) => { resolveSecondCall = resolve })
-    const sdk = createSdk({
-      questionList: async () => {
-        calls += 1
-        if (calls === 1) {
-          return { error: { name: "ServerError", data: { message: "boom" } }, response: new Response(null, { status: 500 }) }
-        }
-        resolveSecondCall()
-        return { data: [que1] }
-      },
-    })
-
-    await bootstrapDirectory({
-      directory: "/repo",
-      sdk,
-      getState: () => state,
-      set: (patch) => { state = { ...state, ...patch } },
-      global: { config: {}, projects: [project] },
-      loadSessions: async () => undefined,
-    })
-    // retry() backs off 500ms before the second attempt; wait for it.
-    await secondCall
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(calls).toBeGreaterThanOrEqual(2)
-    expect(state.question["ses_1"]?.map((q) => q.id)).toEqual(["que_1"])
+    expect(state.current.form.ses_1?.map((f) => f.id)).toEqual(["form_1", "form_2"])
   })
 })

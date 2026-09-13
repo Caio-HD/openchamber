@@ -86,14 +86,6 @@ const joinPath = (base: string, segment: string): string => {
   return `${normalizedBase}/${cleanSegment}`;
 };
 
-const buildRepoPlanPath = (directory: string, created: number, slug: string): string => {
-  return joinPath(joinPath(joinPath(directory, '.opencode'), 'plans'), `${created}-${slug}.md`);
-};
-
-const buildHomePlanPath = (created: number, slug: string): string => {
-  return `~/.opencode/plans/${created}-${slug}.md`;
-};
-
 const resolveTilde = (path: string, homeDir: string | null): string => {
   const trimmed = path.trim();
   if (!trimmed.startsWith('~')) return trimmed;
@@ -620,67 +612,8 @@ export const PlanView: React.FC<PlanViewProps> = ({ targetPath = null, savedProj
         return;
       }
 
-      if (!session?.slug || !session?.time?.created || !sessionDirectory) {
-        setResolvedPath(null);
-        setContent('');
-        return;
-      }
-
-      setLoading(true);
-
-      try {
-        const repoPath = buildRepoPlanPath(sessionDirectory, session.time.created, session.slug);
-        const homePath = resolveTilde(buildHomePlanPath(session.time.created, session.slug), homeDirectory || null);
-
-        let resolved: string | null = null;
-
-        try {
-          await readText(repoPath);
-          resolved = repoPath;
-        } catch {
-          // ignore
-        }
-
-        if (!resolved) {
-          try {
-            await readText(homePath);
-            resolved = homePath;
-          } catch {
-            // ignore
-          }
-        }
-
-        if (cancelled) return;
-
-        if (!resolved) {
-          setResolvedPath(null);
-          setContent('');
-          return;
-        }
-
-        const sessionFileKey = JSON.stringify(['plan-file', activeRuntimeKey, resolved]);
-        await saveQueue.pendingFor(sessionFileKey);
-        if (cancelled) return;
-        const text = await readText(resolved);
-        if (cancelled) return;
-        saveQueue.reset(sessionFileKey);
-        docRef.current = {
-          key: sessionFileKey,
-          target: { filePath: resolved },
-          content: text,
-          editRevision: 0,
-          savedRevision: 0,
-          runtimeKey: activeRuntimeKey,
-        };
-        setResolvedPath(resolved);
-        setContent(text);
-      } catch {
-        if (cancelled) return;
-        setResolvedPath(null);
-        setContent('');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setResolvedPath(null);
+      setContent('');
     };
 
     void run();
@@ -688,7 +621,7 @@ export const PlanView: React.FC<PlanViewProps> = ({ targetPath = null, savedProj
     return () => {
       cancelled = true;
     };
-  }, [activeRuntimeKey, homeDirectory, planModeEnabled, runtimeApis.files, savedPlanId, savedPlanKey, savedPlanProjectRef, saveQueue, scheduleSave, session?.slug, session?.time?.created, sessionDirectory, targetPath]);
+  }, [activeRuntimeKey, homeDirectory, planModeEnabled, runtimeApis.files, savedPlanId, savedPlanKey, savedPlanProjectRef, saveQueue, scheduleSave, sessionDirectory, targetPath]);
 
   // Synchronous buffer tracking: if an edit and an unmount land in the same
   // batch, the passive content effect would never run and a flush would save
@@ -794,7 +727,10 @@ export const PlanView: React.FC<PlanViewProps> = ({ targetPath = null, savedProj
           sessionId = created.id;
           directoryHint = created.path;
         } else {
-          const sessionResult = await createSession(undefined, sendTargetProject.path, null);
+          const sessionResult = await createSession(undefined, sendTargetProject.path, undefined, {
+            model: { providerID: execution.providerID, id: execution.modelID, variant: execution.variant || undefined },
+            agent: execution.agent.trim() || undefined,
+          });
           if (!sessionResult?.id) {
             return;
           }

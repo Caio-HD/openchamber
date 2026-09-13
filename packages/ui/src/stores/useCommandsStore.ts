@@ -12,11 +12,16 @@ import { createDeferredSafeJSONStorage } from "./utils/safeStorage";
 import { useProjectsStore } from "@/stores/useProjectsStore";
 import { runtimeFetch } from "@/lib/runtime-fetch";
 import { runBackgroundNetworkTask } from '@/lib/background-network';
-import { noteDeferredRestartFromPayload } from "@/lib/opencode/deferredRestart";
 
 
 export type CommandScope = 'user' | 'project';
 
+/**
+ * The command entity as OpenChamber persists it, i.e. the OpenCode 2 shape the
+ * config routes read and write. `template` is the markdown body of a `.md`
+ * command; `model` is the joined `provider/model#variant` string; `subagent`
+ * runs the command in a child session instead of the current one.
+ */
 export interface CommandConfig {
   name: string;
   description?: string;
@@ -24,15 +29,29 @@ export interface CommandConfig {
   model?: string | null;
   source?: string;
   template?: string;
+  subagent?: boolean;
   scope?: CommandScope;
 }
 
 export interface Command extends CommandConfig {
   isBuiltIn?: boolean;
+  /** The file OpenChamber would rewrite on the next save. */
+  path?: string | null;
+  /** The file still uses v1 spellings; the next save rewrites it in v2. */
+  legacy?: boolean;
 }
 
 // Built-in commands provided by OpenCode (not defined in user config directories)
 const BUILTIN_COMMAND_NAMES = new Set(['init', 'review']);
+
+/** What `GET /api/config/commands/:name/config` answers. */
+export interface CommandEntityEnvelope {
+  source: 'md' | 'json' | 'none';
+  scope: CommandScope | null;
+  path: string | null;
+  legacy: boolean;
+  config: Omit<CommandConfig, 'name' | 'scope' | 'source'>;
+}
 
 export const isCommandBuiltIn = (command: Command): boolean => {
   return BUILTIN_COMMAND_NAMES.has(command.name);
@@ -61,6 +80,9 @@ const buildCommandsSignature = (commands: Command[]): string => {
       command.description ?? '',
       command.agent ?? '',
       command.model ?? '',
+      command.template ?? '',
+      String(command.subagent === true),
+      String(command.legacy === true),
       String(command.isBuiltIn === true),
     ].join('|'))
     .join('||');
@@ -166,6 +188,7 @@ export interface CommandDraft {
   agent?: string | null;
   model?: string | null;
   template?: string;
+  subagent?: boolean;
 }
 
 interface CommandsStore {
@@ -259,14 +282,16 @@ export const useCommandsStore = create<CommandsStore>()(
                 const queryParams = directory ? `?directory=${encodeURIComponent(directory)}` : '';
 
                 // Ensure the list is scoped to the same directory we use for config source detection.
-                const commands = await runBackgroundNetworkTask(() => opencodeClient.listCommandsWithDetails(directory));
+                // v2 keeps skills in their own catalog, so every command here is a real command file.
+                const commands = await runBackgroundNetworkTask(() => opencodeClient.listCommands(directory));
 
-                const configurableCommands = commands.filter((cmd) => cmd.source !== 'skill');
                 const commandsWithScope = await Promise.all(
-                  configurableCommands.map(async (cmd) => {
+                  commands.map(async (cmd) => {
                     try {
-                      // Force no-cache
-                      const response = await runtimeFetch(`/api/config/commands/${encodeURIComponent(cmd.name)}${queryParams}`, {
+                      // The v2 `CommandInfo` OpenCode lists carries only a name
+                      // and description, so the editable fields come from the
+                      // command's own stored entry.
+                      const response = await runtimeFetch(`/api/config/commands/${encodeURIComponent(cmd.name)}/config${queryParams}`, {
                         headers: {
                           'Cache-Control': 'no-cache',
                           ...(directory ? { 'x-opencode-directory': directory } : {}),
@@ -274,26 +299,20 @@ export const useCommandsStore = create<CommandsStore>()(
                       });
 
                       if (response.ok) {
-                        const data = await response.json();
-
-                        // Prioritize explicit scope
-                        let scope = data.scope;
-
-                        // Fallback to deducing from sources
-                        if (!scope && data.sources) {
-                          const sources = data.sources;
-                          scope = (sources.md?.exists ? sources.md.scope : undefined)
-                            ?? (sources.json?.exists ? sources.json.scope : undefined)
-                            ?? sources.md?.scope
-                            ?? sources.json?.scope;
-                        }
-
-                        if (scope === 'project' || scope === 'user') {
-                          return { ...cmd, scope: scope as CommandScope };
-                        }
-
-                        // Explicitly set null scope if not found
-                        return { ...cmd, scope: undefined };
+                        // SAFETY: `/api/config/commands/:name/config` is
+                        // OpenChamber's own route; it normalizes the entry
+                        // through `config-v2.js` before answering.
+                        const data = await response.json() as CommandEntityEnvelope;
+                        const scope = data.scope === 'project' || data.scope === 'user' ? data.scope : undefined;
+                        return {
+                          ...cmd,
+                          ...data.config,
+                          name: cmd.name,
+                          description: data.config?.description ?? cmd.description,
+                          scope,
+                          path: data.path,
+                          legacy: data.legacy === true,
+                        };
                       }
                     } catch (err) {
                       console.warn(`[CommandsStore] Failed to fetch config for command ${cmd.name}:`, err);
@@ -350,6 +369,7 @@ export const useCommandsStore = create<CommandsStore>()(
             if (config.description) commandConfig.description = config.description;
             if (config.agent) commandConfig.agent = config.agent;
             if (config.model) commandConfig.model = config.model;
+            if (config.subagent !== undefined) commandConfig.subagent = config.subagent;
             if (config.scope) commandConfig.scope = config.scope;
 
             console.log('[CommandsStore] Command config to save:', commandConfig);
@@ -378,12 +398,6 @@ export const useCommandsStore = create<CommandsStore>()(
 
             if (payload?.requiresManualRestart) {
               upsertCommandLocal(set, get, config.name, config, directory);
-              return true;
-            }
-
-            if (noteDeferredRestartFromPayload(payload, 'commands', { id: config.name })) {
-              upsertCommandLocal(set, get, config.name, config, directory);
-              emitConfigChange("commands", { source: CONFIG_EVENT_SOURCE });
               return true;
             }
 
@@ -418,6 +432,7 @@ export const useCommandsStore = create<CommandsStore>()(
             if (config.agent !== undefined) commandConfig.agent = config.agent;
             if (config.model !== undefined) commandConfig.model = config.model;
             if (config.template !== undefined) commandConfig.template = config.template;
+            if (config.subagent !== undefined) commandConfig.subagent = config.subagent;
 
             console.log('[CommandsStore] Command config to update:', commandConfig);
 
@@ -445,12 +460,6 @@ export const useCommandsStore = create<CommandsStore>()(
 
             if (payload?.requiresManualRestart) {
               upsertCommandLocal(set, get, name, config, directory);
-              return true;
-            }
-
-            if (noteDeferredRestartFromPayload(payload, 'commands', { id: name })) {
-              upsertCommandLocal(set, get, name, config, directory);
-              emitConfigChange("commands", { source: CONFIG_EVENT_SOURCE });
               return true;
             }
 
@@ -497,12 +506,6 @@ export const useCommandsStore = create<CommandsStore>()(
 
             if (payload?.requiresManualRestart) {
               removeCommandLocal(set, get, name, directory);
-              return true;
-            }
-
-            if (noteDeferredRestartFromPayload(payload, 'commands', { id: name })) {
-              removeCommandLocal(set, get, name, directory);
-              emitConfigChange("commands", { source: CONFIG_EVENT_SOURCE });
               return true;
             }
 
