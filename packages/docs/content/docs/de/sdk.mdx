@@ -92,7 +92,7 @@ Deine Seite erkennt über `ctx.surface` (`panel` oder `dialog`), wo sie gerade l
 
 `contributes.integration` ist optional. Es fügt unter Einstellungen → Integrationen eine Karte hinzu, auf der der Nutzer ein Konto verbindet. Siehe [Konten und Netzwerk](#konten-und-netzwerk).
 
-`contributes.service` ist optional. Es deklariert einen lokalen Dienst (einen Prozess, den OpenChamber neben der Erweiterung startet) für Dinge, an die eine Webseite nicht herankommt, etwa einen Docker-Socket. Siehe die Paketdatei `GUEST_SERVICES.md`.
+`contributes.service` ist optional. Es deklariert einen lokalen Dienst (einen Prozess, den OpenChamber neben der Erweiterung startet) für Dinge, an die eine Webseite nicht herankommt, etwa einen Docker-Socket. Dieser Prozess läuft mit dem vollen Zugriff des Nutzers und ohne Sandbox, deshalb warnt der Bestätigungsdialog davor; deklariere einen nur, wenn die Seite die Aufgabe nicht selbst erledigen kann. Siehe die Paketdatei `GUEST_SERVICES.md`.
 
 ## Berechtigungen
 
@@ -103,10 +103,25 @@ Ein Panel zeichnen und die aktuelle Session lesen braucht keine Berechtigung. Al
 | `prompt` | Nachrichten in die Session des Nutzers senden (`prompt({ send: true })`, `startSession` mit `text`) |
 | `sessions` | Sessions und Worktrees anlegen (`startSession`) |
 | `files` | Dateien innerhalb des offenen Projekts lesen und schreiben (`readFile`, `writeFile`, `listDir`, `stat` mit einem relativen Pfad) |
+| `model` | einmalige Textgenerierung mit dem Small Model des Nutzers (`generate`), außerhalb jeder Session |
 
 Vier weitere kommen automatisch dazu: `network`, wenn du eine `integration` deklarierst, `service`, wenn du einen `service` deklarierst, `filesystem`, wenn du `filesystem`-Muster deklarierst, und `conversation`, wenn eine Session-Aktion die Nachrichten anfordert (siehe [Aktionen, Befehle und das Badge](#aktionen-befehle-und-das-badge)).
 
 Der Nutzer sieht die vollständige Liste einmal, bei der Installation der Erweiterung, und bestätigt sie oder entfernt die Erweiterung. Fordert eine neue Version mehr an, erscheint der Dialog erneut. Ein Aufruf, der eine nicht bestätigte Berechtigung braucht, schlägt mit `NOT_GRANTED` fehl.
+
+## Text erzeugen
+
+Mit der Berechtigung `model` bittet `host.generate` das Small Model des Nutzers um eine einmalige Antwort: eine Zusammenfassung, einen Titel, einen Entwurf. Nichts landet in einer Session, es wird kein Verlauf gespeichert, und die Erweiterung wählt nie einen Anbieter. OpenChamber nutzt dasselbe Modell, das es für seine eigene Hintergrundarbeit verwendet, eingestellt unter Einstellungen → Sessions → Small Model, oder automatisch aus den angemeldeten Anbietern des Nutzers gewählt.
+
+```ts
+const { text } = await host.generate({
+  prompt: task.description,
+  system: "Write a one-line summary. Return only the summary.",
+  maxOutputTokens: 200,
+});
+```
+
+Ist kein Modell verfügbar, schlägt der Aufruf mit `NO_MODEL` fehl; ein Modell, das einen Fehler geliefert hat, ist `MODEL_FAILED`. Prompts sind auf 64000 Zeichen begrenzt, und der Aufruf wartet bis zu 90 Sekunden. Der Nutzer sieht diese Berechtigung als „Dein Small Model verwenden“, und es kostet ihn Tokens, halte Prompts also kurz und ruf es bei einem Klick auf, nicht bei jedem Tastendruck.
 
 ## Konten und Netzwerk
 

@@ -656,6 +656,18 @@ describe('parseGuestMessage', () => {
     })?.type).toBe('request');
   });
 
+  test('accepts generate messages and drops an empty prompt or oversized output ask', () => {
+    const base = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1 as const, id: 'oc-30' };
+    expect(parseGuestMessage({ ...base, type: 'generate', payload: { prompt: 'Summarize' } })?.type).toBe('generate');
+    expect(parseGuestMessage({ ...base, type: 'generate', payload: { prompt: 'Summarize', system: 'Be brief', maxOutputTokens: 200 } })).toMatchObject({
+      payload: { prompt: 'Summarize', system: 'Be brief', maxOutputTokens: 200 },
+    });
+    expect(parseGuestMessage({ ...base, type: 'generate', payload: { prompt: '   ' } })).toBeNull();
+    expect(parseGuestMessage({ ...base, type: 'generate', payload: { prompt: 'x', maxOutputTokens: 0 } })).toBeNull();
+    expect(parseGuestMessage({ ...base, type: 'generate', payload: { prompt: 'x', maxOutputTokens: 4_001 } })).toBeNull();
+    expect(parseGuestMessage({ ...base, type: 'generate', payload: {} })).toBeNull();
+  });
+
   test('accepts file messages and drops an empty or backslash path', () => {
     const base = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1 as const, id: 'oc-20' };
     expect(parseGuestMessage({ ...base, type: 'file-read', payload: { path: 'README.md' } })?.type).toBe('file-read');

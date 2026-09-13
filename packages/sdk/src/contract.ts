@@ -127,6 +127,20 @@ export type FileListEntry = { name: string; kind: GuestFileEntryKind };
 export type FileListResult = { entries: FileListEntry[] };
 export type FileStatResult = { kind: GuestFileStatKind; size: number; mtime: number };
 
+/**
+ * One-off text generation with the user's Small Model (capability `model`).
+ * No session, no history, no tools: `prompt` in, `text` out. The app picks
+ * the model the same way it does for its own background actions.
+ */
+export type GenerateRequest = {
+  prompt: string;
+  system?: string;
+  /** Upper bound on the answer, 1 to `GUEST_GENERATE_OUTPUT_TOKENS_MAX`. */
+  maxOutputTokens?: number;
+};
+
+export type GenerateResult = { text: string };
+
 export type HostResultPayload =
   | GuestRequestResult
   | StartSessionResult
@@ -135,7 +149,8 @@ export type HostResultPayload =
   | FileReadResult
   | FileWriteResult
   | FileListResult
-  | FileStatResult;
+  | FileStatResult
+  | GenerateResult;
 
 export const isStartSessionResult = (
   value: HostResultPayload | undefined,
@@ -306,6 +321,16 @@ export const GUEST_FILE_PATH_MAX = 1_024;
 export const GUEST_FILE_CONTENT_MAX = 2_000_000;
 /** Entries a `listDir` answer carries; longer directories are truncated. */
 export const GUEST_FILE_LIST_MAX = 2_000;
+/** Characters in a `generate` prompt. */
+export const GUEST_GENERATE_PROMPT_MAX = 64_000;
+/** Characters in a `generate` system prompt. */
+export const GUEST_GENERATE_SYSTEM_MAX = 8_000;
+/** Largest `maxOutputTokens` a guest may ask for. */
+export const GUEST_GENERATE_OUTPUT_TOKENS_MAX = 4_000;
+/** Characters in a `generate` answer. */
+export const GUEST_GENERATE_TEXT_MAX = 256_000;
+/** How long `generate` waits for the model before `HOST_TIMEOUT`. */
+export const GUEST_GENERATE_TIMEOUT_MS = 90_000;
 /** Characters of one message's text on a `GuestMessageItem` or a `GuestSessionItem` message. */
 export const GUEST_ITEM_MESSAGE_TEXT_MAX = 200_000;
 /** `JSON.stringify` length ceiling for a `GuestSessionItem`; the host drops the oldest messages to stay under it. */
@@ -332,6 +357,8 @@ export const HOST_REQUEST_ERROR_CODES = [
   'NOT_FOUND',
   'FILE_TOO_LARGE',
   'DENIED',
+  'NO_MODEL',
+  'MODEL_FAILED',
 ] as const;
 
 export const SERVICE_STATUS_VALUES = ['stopped', 'starting', 'ready', 'failed'] as const;
@@ -527,6 +554,7 @@ export type GuestFileReadMessage = GuestCall<'file-read', FileReadRequest>;
 export type GuestFileWriteMessage = GuestCall<'file-write', FileWriteRequest>;
 export type GuestFileListMessage = GuestCall<'file-list', FileListRequest>;
 export type GuestFileStatMessage = GuestCall<'file-stat', FileStatRequest>;
+export type GuestGenerateMessage = GuestCall<'generate', GenerateRequest>;
 export type GuestBadgeMessage = GuestCall<'badge', BadgeRequest>;
 /** Answers a host `resolve` by `id`. The host sends no `result` back for it. */
 export type GuestResolveResultMessage = Envelope & { type: 'resolve-result'; id: string; payload: ResolveResultPayload };
@@ -552,6 +580,7 @@ export type GuestMessage =
   | GuestFileWriteMessage
   | GuestFileListMessage
   | GuestFileStatMessage
+  | GuestGenerateMessage
   | GuestBadgeMessage
   | GuestResolveResultMessage;
 
@@ -584,6 +613,10 @@ export const isFileStatResult = (
 ): value is FileStatResult => Boolean(
   value && 'kind' in value && 'size' in value && fileStatKindSet.has(String(value.kind)) && Number.isFinite(value.size),
 );
+
+export const isGenerateResult = (
+  value: HostResultPayload | undefined,
+): value is GenerateResult => Boolean(value && 'text' in value && String(value.text) === value.text && !('status' in value));
 
 const HOST_PUSH_TYPES: ReadonlySet<string> = new Set([
   'ready', 'directory', 'session', 'connection', 'settings', 'session-lifecycle', 'item', 'resolve',

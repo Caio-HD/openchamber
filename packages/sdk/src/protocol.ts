@@ -21,6 +21,10 @@ import {
   GUEST_FILE_CONTENT_MAX,
   GUEST_FILE_ENTRY_KINDS,
   GUEST_FILE_LIST_MAX,
+  GUEST_GENERATE_OUTPUT_TOKENS_MAX,
+  GUEST_GENERATE_PROMPT_MAX,
+  GUEST_GENERATE_SYSTEM_MAX,
+  GUEST_GENERATE_TEXT_MAX,
   GUEST_FILE_PATH_MAX,
   GUEST_FILE_STAT_KINDS,
   GUEST_REQUEST_BODY_MAX,
@@ -127,6 +131,10 @@ const fileStatResultPayloadSchema = z.object({
   mtime: z.number().int().min(0),
 });
 
+const generateResultPayloadSchema = z.object({
+  text: z.string().max(GUEST_GENERATE_TEXT_MAX),
+});
+
 const hostResultPayloadSchema = z.union([
   startSessionResultPayloadSchema,
   requestResultPayloadSchema,
@@ -136,6 +144,7 @@ const hostResultPayloadSchema = z.union([
   fileWriteResultPayloadSchema,
   fileListResultPayloadSchema,
   fileStatResultPayloadSchema,
+  generateResultPayloadSchema,
 ]);
 
 const attachPayloadSchema = z.object({
@@ -449,6 +458,16 @@ export const guestMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('file-stat'),
     id: z.string().min(1),
     payload: z.object({ path: filePathSchema }),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('generate'),
+    id: z.string().min(1),
+    payload: z.object({
+      prompt: z.string().trim().min(1).max(GUEST_GENERATE_PROMPT_MAX),
+      system: z.string().trim().min(1).max(GUEST_GENERATE_SYSTEM_MAX).optional(),
+      maxOutputTokens: z.number().int().min(1).max(GUEST_GENERATE_OUTPUT_TOKENS_MAX).optional(),
+    }),
   }),
   z.object({
     ...envelope,

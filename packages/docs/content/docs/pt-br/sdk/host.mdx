@@ -58,6 +58,7 @@ Tokens de acesso nunca aparecem aqui nem no resultado de um `request`.
 | `writeFile(path, content)` | escreve um arquivo de texto de forma atômica, criando as pastas acima. Devolve `{ written: true }`. |
 | `listDir(path)` | lista uma pasta. Devolve `{ entries: [{ name, kind }] }`, `kind` é `file`, `directory` ou `other`. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` é `file`, `directory`, `other` ou `missing`. |
+| `generate({ prompt, system?, maxOutputTokens? })` | texto avulso do Small Model do usuário. Retorna `{ text }`. Precisa da capacidade `model`. |
 | `onResolve(handler)` | registra o handler dos seus comandos de barra. Ele recebe `{ command, args }` e devolve um item para anexar ou `null`. |
 | `setBadge(count)` | mostra um número (0 a 999) no seu ícone da barra lateral, ou `null` para limpá-lo |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Limites: caminho de até 1024 caracteres, conteúdo de até 2,000,000 caracteres, listagem de até 2000 entradas. Passar do limite de conteúdo é `FILE_TOO_LARGE`.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` tem de 1 a 64.000 caracteres após o trim, `system` até 8.000, `maxOutputTokens` de 1 a 4.000. Nada entra em uma sessão e nenhum histórico é mantido; a extensão nunca escolhe o modelo. A chamada espera até 90 segundos. Nenhum Small Model utilizável é `NO_MODEL`; um erro do modelo é `MODEL_FAILED`. Veja [Gerar texto](/sdk/#gerar-texto).
+
 ## Códigos de erro
 
 Chamadas que falham lançam `HostRequestError`. `code` é um destes; `message` traz mais detalhes.
@@ -196,6 +205,8 @@ Chamadas que falham lançam `HostRequestError`. `code` é um destes; `message` t
 | `NOT_FOUND` | `readFile` em um arquivo que não existe |
 | `FILE_TOO_LARGE` | conteúdo do arquivo acima do limite, na leitura ou na escrita |
 | `DENIED` | o sistema operacional recusou a operação no arquivo |
+| `NO_MODEL` | `generate` sem Small Model disponível |
+| `MODEL_FAILED` | o Small Model retornou um erro |
 
 ## Relacionado
 

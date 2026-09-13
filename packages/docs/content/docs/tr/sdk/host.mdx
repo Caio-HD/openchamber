@@ -58,6 +58,7 @@ Erişim token'ları burada da, `request` sonucunda da asla görünmez.
 | `writeFile(path, content)` | metin dosyasını atomik olarak yazar, üst klasörleri oluşturur. `{ written: true }` döndürür. |
 | `listDir(path)` | klasörü listeler. `{ entries: [{ name, kind }] }` döndürür, `kind` `file`, `directory` veya `other` olur. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` `file`, `directory`, `other` veya `missing` olur. |
+| `generate({ prompt, system?, maxOutputTokens? })` | kullanıcının Small Model'inden tek seferlik metin. `{ text }` döndürür. `model` yeteneği gerekir. |
 | `onResolve(handler)` | eğik çizgi komutlarınız için işleyiciyi kaydeder. `{ command, args }` alır ve iliştirilecek bir öğe ya da `null` döndürür. |
 | `setBadge(count)` | şerit simgenizde bir sayı (0 ile 999 arası) gösterir, `null` ile temizler |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Sınırlar: yol en fazla 1024 karakter, içerik en fazla 2,000,000 karakter, listeleme en fazla 2000 kayıt. İçerik sınırını aşmak `FILE_TOO_LARGE` olur.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` kırpıldıktan sonra 1 ila 64.000 karakter, `system` en fazla 8.000, `maxOutputTokens` 1 ila 4.000 olabilir. Hiçbir şey bir oturuma girmez ve geçmiş tutulmaz; eklenti asla modeli seçmez. Çağrı en fazla 90 saniye bekler. Kullanılabilir bir Small Model yoksa `NO_MODEL`; model hatası `MODEL_FAILED` olur. Bkz. [Metin üretme](/sdk/#metin-üretme).
+
 ## Hata kodları
 
 Başarısız çağrılar `HostRequestError` fırlatır. `code` şunlardan biridir; `message` daha fazlasını söyler.
@@ -196,6 +205,8 @@ Başarısız çağrılar `HostRequestError` fırlatır. `code` şunlardan biridi
 | `NOT_FOUND` | var olmayan bir dosyada `readFile` |
 | `FILE_TOO_LARGE` | okuma veya yazmada dosya içeriği sınırın üzerinde |
 | `DENIED` | işletim sistemi dosya işlemini reddetti |
+| `NO_MODEL` | kullanılabilir Small Model olmadan `generate` |
+| `MODEL_FAILED` | Small Model bir hata döndürdü |
 
 ## İlgili sayfalar
 

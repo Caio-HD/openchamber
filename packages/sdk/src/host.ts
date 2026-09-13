@@ -2,6 +2,10 @@ import { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL } from './api-vers
 import {
   GUEST_FILE_CONTENT_MAX,
   GUEST_FILE_PATH_MAX,
+  GUEST_GENERATE_OUTPUT_TOKENS_MAX,
+  GUEST_GENERATE_PROMPT_MAX,
+  GUEST_GENERATE_SYSTEM_MAX,
+  GUEST_GENERATE_TIMEOUT_MS,
   GUEST_REQUEST_TIMEOUT_MS,
   GUEST_RESOLVE_ERROR_MAX,
   isGuestFilePath,
@@ -36,6 +40,9 @@ import {
   type FileReadResult,
   type FileStatResult,
   type FileWriteResult,
+  type GenerateRequest,
+  type GenerateResult,
+  isGenerateResult,
   isFileListResult,
   isFileReadResult,
   isFileStatResult,
@@ -116,6 +123,14 @@ export type HostClient = {
   listDir: (path: string) => Promise<FileListResult>;
   /** Kind, size, and mtime of a path. A missing path is `kind: 'missing'`, not an error. Same path rules as `readFile`. */
   stat: (path: string) => Promise<FileStatResult>;
+  /**
+   * One-off text generation with the user's Small Model (capability
+   * `model`). Nothing enters a session and no history is kept. `prompt` is
+   * 1 to `GUEST_GENERATE_PROMPT_MAX` characters, `system` up to
+   * `GUEST_GENERATE_SYSTEM_MAX`. No usable model is `NO_MODEL`; a model that
+   * failed is `MODEL_FAILED`. Waits up to `GUEST_GENERATE_TIMEOUT_MS`.
+   */
+  generate: (request: GenerateRequest) => Promise<GenerateResult>;
   /** Number on this guest's rail icon (0 to `GUEST_BADGE_MAX`); `null` clears it. Opening the panel clears it too. */
   setBadge: (count: number | null) => Promise<void>;
   dispose: () => void;
@@ -316,6 +331,7 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
 
   const send = (
     message: Exclude<GuestMessage, { type: 'hello' }>,
+    timeoutMs: number = requestTimeoutMs,
   ): Promise<HostResultPayload | undefined> => {
     if (target.parent === target) {
       return Promise.reject(new HostRequestError('HOST_UNAVAILABLE', 'No host frame. This page is not in an iframe.'));
@@ -324,7 +340,7 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       const timer = setTimeout(() => {
         pending.delete(message.id);
         reject(new HostRequestError('HOST_TIMEOUT', 'Host did not answer in time.'));
-      }, requestTimeoutMs);
+      }, timeoutMs);
       pending.set(message.id, { resolve, reject, timer });
       post(message);
     });
@@ -572,6 +588,38 @@ export const connectHost = (options: HostClientOptions = {}): HostClient => {
       }
       return result;
     }),
+    generate: (input) => {
+      const prompt = input.prompt.trim();
+      const system = input.system?.trim();
+      if (prompt.length === 0 || prompt.length > GUEST_GENERATE_PROMPT_MAX) {
+        return Promise.reject(new HostRequestError('HOST_REJECTED', `Prompt must be 1 to ${GUEST_GENERATE_PROMPT_MAX} characters.`));
+      }
+      if (system !== undefined && (system.length === 0 || system.length > GUEST_GENERATE_SYSTEM_MAX)) {
+        return Promise.reject(new HostRequestError('HOST_REJECTED', `System prompt must be 1 to ${GUEST_GENERATE_SYSTEM_MAX} characters.`));
+      }
+      const maxOutputTokens = input.maxOutputTokens === undefined
+        ? undefined
+        : Math.min(GUEST_GENERATE_OUTPUT_TOKENS_MAX, Math.max(1, Math.floor(input.maxOutputTokens)));
+      if (maxOutputTokens !== undefined && !Number.isFinite(maxOutputTokens)) {
+        return Promise.reject(new HostRequestError('HOST_REJECTED', 'maxOutputTokens must be a number.'));
+      }
+      const payload: GenerateRequest = { prompt };
+      if (system !== undefined) payload.system = system;
+      if (maxOutputTokens !== undefined) payload.maxOutputTokens = maxOutputTokens;
+      // The model answers slower than any other host call, so this one waits longer.
+      return send({
+        channel: OPENCHAMBER_SDK_CHANNEL,
+        v: OPENCHAMBER_SDK_API_VERSION,
+        type: 'generate',
+        id: nextId(ids),
+        payload,
+      }, options.requestTimeoutMs ?? GUEST_GENERATE_TIMEOUT_MS).then((result) => {
+        if (!isGenerateResult(result)) {
+          throw new HostRequestError('HOST_REJECTED', 'Host did not return generated text.');
+        }
+        return result;
+      });
+    },
     setBadge: (count) => request({
       channel: OPENCHAMBER_SDK_CHANNEL,
       v: OPENCHAMBER_SDK_API_VERSION,

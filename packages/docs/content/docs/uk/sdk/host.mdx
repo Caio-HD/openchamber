@@ -58,6 +58,7 @@ const host = connectHost();
 | `writeFile(path, content)` | атомарно записати текстовий файл, створюючи батьківські теки. Повертає `{ written: true }`. |
 | `listDir(path)` | перелічити теку. Повертає `{ entries: [{ name, kind }] }`, `kind` - `file`, `directory` або `other`. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` - `file`, `directory`, `other` або `missing`. |
+| `generate({ prompt, system?, maxOutputTokens? })` | одноразовий текст від Small Model користувача. Повертає `{ text }`. Потребує дозволу `model`. |
 | `onResolve(handler)` | зареєструвати обробник ваших слеш-команд. Він отримує `{ command, args }` і повертає елемент для прикріплення або `null`. |
 | `setBadge(count)` | показати число (від 0 до 999) на вашій іконці в рейці або `null`, щоб прибрати його |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Обмеження: шлях до 1024 символів, вміст до 2,000,000 символів, список до 2000 записів. Перевищення обмеження вмісту - `FILE_TOO_LARGE`.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` - від 1 до 64 000 символів після обрізання, `system` - до 8000, `maxOutputTokens` - від 1 до 4000. Нічого не потрапляє в сесію, історія не зберігається; розширення ніколи не обирає модель. Виклик чекає до 90 секунд. Відсутність придатного Small Model - це `NO_MODEL`; помилка моделі - `MODEL_FAILED`. Див. [Генерація тексту](/sdk/#генерація-тексту).
+
 ## Коди помилок
 
 Невдалі виклики кидають `HostRequestError`. `code` - один із цих; `message` пояснює докладніше.
@@ -196,6 +205,8 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 | `NOT_FOUND` | `readFile` файлу, якого не існує |
 | `FILE_TOO_LARGE` | вміст файлу перевищує обмеження, під час читання або запису |
 | `DENIED` | операційна система відмовила у файловій операції |
+| `NO_MODEL` | `generate` без доступного Small Model |
+| `MODEL_FAILED` | Small Model повернула помилку |
 
 ## Дивіться також
 

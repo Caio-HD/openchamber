@@ -58,6 +58,7 @@ Zugriffstokens tauchen hier nie auf, auch nicht in einem `request`-Ergebnis.
 | `writeFile(path, content)` | eine Textdatei atomar schreiben, übergeordnete Ordner werden angelegt. Liefert `{ written: true }`. |
 | `listDir(path)` | einen Ordner auflisten. Liefert `{ entries: [{ name, kind }] }`, `kind` ist `file`, `directory` oder `other`. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` ist `file`, `directory`, `other` oder `missing`. |
+| `generate({ prompt, system?, maxOutputTokens? })` | einmaliger Text vom Small Model des Nutzers. Liefert `{ text }`. Braucht die Berechtigung `model`. |
 | `onResolve(handler)` | den Handler für deine Slash-Befehle registrieren. Er bekommt `{ command, args }` und liefert einen Eintrag zum Anhängen oder `null`. |
 | `setBadge(count)` | eine Zahl (0 bis 999) auf deinem Symbol in der Leiste zeigen, oder `null`, um sie zu entfernen |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Grenzen: Pfad bis 1024 Zeichen, Inhalt bis 2.000.000 Zeichen, Auflistung bis 2000 Einträge. Über der Inhaltsgrenze ist `FILE_TOO_LARGE`.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` ist 1 bis 64000 Zeichen nach dem Trimmen, `system` bis 8000, `maxOutputTokens` 1 bis 4000. Nichts landet in einer Session, und es wird kein Verlauf gespeichert; die Erweiterung wählt das Modell nie selbst. Der Aufruf wartet bis zu 90 Sekunden. Kein nutzbares Small Model ist `NO_MODEL`; ein Modellfehler ist `MODEL_FAILED`. Siehe [Text erzeugen](/sdk/#text-erzeugen).
+
 ## Fehlercodes
 
 Fehlgeschlagene Aufrufe werfen `HostRequestError`. `code` ist einer der folgenden; `message` sagt mehr.
@@ -196,6 +205,8 @@ Fehlgeschlagene Aufrufe werfen `HostRequestError`. `code` ist einer der folgende
 | `NOT_FOUND` | `readFile` auf eine Datei, die nicht existiert |
 | `FILE_TOO_LARGE` | Dateiinhalt über der Grenze, beim Lesen oder Schreiben |
 | `DENIED` | das Betriebssystem hat die Dateioperation verweigert |
+| `NO_MODEL` | `generate` ohne verfügbares Small Model |
+| `MODEL_FAILED` | das Small Model hat einen Fehler zurückgegeben |
 
 ## Verwandt
 

@@ -58,6 +58,7 @@ Les tokens d'accès n'apparaissent jamais ici ni dans un résultat de `request`.
 | `writeFile(path, content)` | écrit un fichier texte de façon atomique, en créant les dossiers parents. Renvoie `{ written: true }`. |
 | `listDir(path)` | liste un dossier. Renvoie `{ entries: [{ name, kind }] }`, `kind` vaut `file`, `directory` ou `other`. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` vaut `file`, `directory`, `other` ou `missing`. |
+| `generate({ prompt, system?, maxOutputTokens? })` | texte ponctuel du Small Model de l'utilisateur. Renvoie `{ text }`. Nécessite la capacité `model`. |
 | `onResolve(handler)` | enregistre le gestionnaire de vos commandes slash. Il reçoit `{ command, args }` et renvoie un élément à attacher ou `null`. |
 | `setBadge(count)` | affiche un nombre (0 à 999) sur votre icône de la barre latérale, ou `null` pour l'effacer |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Limites : chemin jusqu'à 1024 caractères, contenu jusqu'à 2 000 000 caractères, listing jusqu'à 2000 entrées. Au-delà de la limite de contenu, c'est `FILE_TOO_LARGE`.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` fait de 1 à 64 000 caractères après trim, `system` jusqu'à 8 000, `maxOutputTokens` de 1 à 4 000. Rien n'entre dans une session et aucun historique n'est conservé ; l'extension ne choisit jamais le modèle. L'appel attend jusqu'à 90 secondes. Aucun Small Model utilisable donne `NO_MODEL` ; une erreur du modèle donne `MODEL_FAILED`. Voir [Générer du texte](/sdk/#générer-du-texte).
+
 ## Codes d'erreur
 
 Les appels en échec lèvent `HostRequestError`. `code` est l'un des suivants ; `message` en dit plus.
@@ -196,6 +205,8 @@ Les appels en échec lèvent `HostRequestError`. `code` est l'un des suivants ; 
 | `NOT_FOUND` | `readFile` sur un fichier qui n'existe pas |
 | `FILE_TOO_LARGE` | contenu du fichier au-delà de la limite, en lecture ou en écriture |
 | `DENIED` | le système d'exploitation a refusé l'opération sur le fichier |
+| `NO_MODEL` | `generate` sans Small Model disponible |
+| `MODEL_FAILED` | le Small Model a renvoyé une erreur |
 
 ## Voir aussi
 

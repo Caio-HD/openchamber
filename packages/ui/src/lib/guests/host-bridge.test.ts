@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { OPENCHAMBER_SDK_CHANNEL, type GuestMessage, type GuestRequest, type ResolveResultPayload } from '@openchamber/sdk';
 
 import type { GuestFileProxyResult, GuestFileRequest } from './files.ts';
+import type { GuestGenerateProxyResult } from './generate.ts';
 
 import {
   answerGuestMessage,
@@ -53,6 +54,7 @@ const effects = (overrides: {
     | { ok: false; code: 'HOST_REJECTED' | 'NO_SERVICE'; message: string }
   >;
   file?: (request: GuestFileRequest) => Promise<GuestFileProxyResult>;
+  generate?: (request: { prompt: string; system?: string; maxOutputTokens?: number }) => Promise<GuestGenerateProxyResult>;
   setBadge?: (count: number | null) => void;
   resolveResult?: (id: string, payload: ResolveResultPayload) => void;
 } = {}) => ({
@@ -72,6 +74,7 @@ const effects = (overrides: {
   serviceRequest: overrides.serviceRequest ?? (async () => ({ ok: true, result: { status: 200, body: '{}' } })),
   serviceStatus: overrides.serviceStatus ?? (async () => ({ ok: true, result: { status: 'ready' as const } })),
   file: overrides.file ?? (async () => ({ ok: true, result: { written: true as const } })),
+  generate: overrides.generate ?? (async () => ({ ok: true, result: { text: '' } })),
   setBadge: overrides.setBadge ?? (() => {}),
   resolveResult: overrides.resolveResult ?? (() => {}),
 });
@@ -512,6 +515,21 @@ describe('answerGuestMessage', () => {
       { op: 'list', path: '.' },
       { op: 'stat', path: 'b' },
     ]);
+  });
+
+  test('routes generate to the effect and forwards its refusal code', async () => {
+    const seen: Array<{ prompt: string; system?: string; maxOutputTokens?: number }> = [];
+    const generate = async (request: { prompt: string; system?: string; maxOutputTokens?: number }): Promise<GuestGenerateProxyResult> => {
+      seen.push(request);
+      if (request.prompt === 'fail') return { ok: false, code: 'NO_MODEL', message: 'No Small Model.' };
+      return { ok: true, result: { text: 'Done.' } };
+    };
+    const base = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1 } as const;
+    const ok = await answerGuestMessage({ ...base, type: 'generate', id: 'oc-40', payload: { prompt: 'Summarize', system: 'Brief', maxOutputTokens: 50 } }, effects({ generate }));
+    expect(ok).toMatchObject({ id: 'oc-40', ok: true, payload: { text: 'Done.' } });
+    const refused = await answerGuestMessage({ ...base, type: 'generate', id: 'oc-41', payload: { prompt: 'fail' } }, effects({ generate }));
+    expect(refused).toMatchObject({ id: 'oc-41', ok: false, code: 'NO_MODEL', error: 'No Small Model.' });
+    expect(seen).toEqual([{ prompt: 'Summarize', system: 'Brief', maxOutputTokens: 50 }, { prompt: 'fail' }]);
   });
 
   test('forwards NO_SERVICE from serviceRequest', async () => {

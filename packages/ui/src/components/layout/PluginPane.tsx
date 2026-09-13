@@ -35,6 +35,7 @@ import {
 import { useGuestBadgeStore } from '@/lib/guests/badge-store';
 import { guestMay, isGuestActive } from '@/lib/guests/capabilities';
 import { guestFileOperation } from '@/lib/guests/files';
+import { guestGenerate } from '@/lib/guests/generate';
 import { registerGuestResolver, type GuestResolveOutcome } from '@/lib/guests/resolve';
 import { resolveGuestFrameUrl } from '@/lib/guests/frame-url';
 import { useGuestItemStore } from '@/lib/guests/item-store';
@@ -490,6 +491,19 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
             return Promise.resolve({ ok: false as const, code: 'NO_DIRECTORY' as const, message: 'No project is open.' });
           }
           return guestFileOperation(guestIdRef.current, request, directory);
+        },
+        generate: (request) => {
+          if (!guestEnabledRef.current) {
+            return Promise.resolve({
+              ok: false as const,
+              code: 'DISABLED' as const,
+              message: 'This extension is disabled in Settings → Extensions.',
+            });
+          }
+          if (!guestMay(guestRef.current, 'model')) {
+            return Promise.resolve({ ok: false as const, code: 'NOT_GRANTED' as const, message: NOT_GRANTED_MESSAGE });
+          }
+          return guestGenerate(guestIdRef.current, request, directoryRef.current || null);
         },
         setBadge: (count) => {
           if (!guestEnabledRef.current) return;

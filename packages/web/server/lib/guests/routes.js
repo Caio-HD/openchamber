@@ -5,6 +5,10 @@ import { z } from 'zod';
 
 import {
   GUEST_CAPABILITIES,
+  GUEST_GENERATE_OUTPUT_TOKENS_MAX,
+  GUEST_GENERATE_PROMPT_MAX,
+  GUEST_GENERATE_SYSTEM_MAX,
+  GUEST_GENERATE_TEXT_MAX,
   GUEST_FILE_CONTENT_MAX,
   GUEST_FILE_PATH_MAX,
   isGuestRequestPath,
@@ -54,6 +58,8 @@ const json16 = express.json({ limit: '16kb' });
 const json80 = express.json({ limit: '80kb' });
 // GUEST_FILE_CONTENT_MAX characters can be several bytes each once JSON-escaped.
 const jsonFiles = express.json({ limit: '12mb' });
+// A 64k-character prompt in a multi-byte script is a few hundred KB of JSON.
+const jsonGenerate = express.json({ limit: '512kb' });
 
 const clientBodySchema = z.object({
   clientId: z.string().trim().min(1).max(400),
@@ -81,6 +87,12 @@ const fileBodySchema = z.object({
   path: z.string().min(1).max(GUEST_FILE_PATH_MAX),
   content: z.string().max(GUEST_FILE_CONTENT_MAX).optional(),
 }).refine((value) => value.op !== 'write' || typeof value.content === 'string', { path: ['content'] });
+
+const generateBodySchema = z.object({
+  prompt: z.string().trim().min(1).max(GUEST_GENERATE_PROMPT_MAX),
+  system: z.string().trim().min(1).max(GUEST_GENERATE_SYSTEM_MAX).optional(),
+  maxOutputTokens: z.number().int().min(1).max(GUEST_GENERATE_OUTPUT_TOKENS_MAX).optional(),
+});
 
 const socketOverrideBodySchema = z.object({
   id: z.string().trim().regex(/^[a-z][a-z0-9-]*$/).max(64),
@@ -176,6 +188,7 @@ export const registerGuestRoutes = (app, {
   openchamberVersion,
   resolveGitBinaryForSpawn,
   resolveOptionalProjectDirectory,
+  getSmallModelService,
 }) => {
   const persistPath = extensionsPersistPath(openchamberDataDir);
   const authPath = guestAuthPersistPath(openchamberDataDir);
@@ -580,6 +593,60 @@ export const registerGuestRoutes = (app, {
       // Only the failure class is logged: never the path or the file content.
       console.error('Failed to run guest file operation:', error?.code ?? error?.name ?? 'error');
       res.status(500).json({ error: 'Failed to run guest file operation' });
+    }
+  });
+
+  // One-off text generation with the user's Small Model. The model is
+  // resolved and authenticated by the small-model service exactly as for the
+  // app's own background actions (session titles, notes); the guest never
+  // picks a provider and no session is involved. Prompt and answer are never
+  // logged.
+  app.post('/api/guests/:id/generate', jsonGenerate, async (req, res) => {
+    try {
+      const guest = await loadGuest(req.params.id);
+      if (!guest) {
+        return res.status(404).json({ error: 'not-found' });
+      }
+      const store = await readExtensionStore(persistPath);
+      if (store.disabledGuests?.[guest.id]) {
+        return res.status(400).json({ error: 'DISABLED', message: `${guest.name} is disabled in Settings → Extensions.` });
+      }
+      if (!(store.capabilityGrants?.[guest.id] ?? []).includes('model')) {
+        return res.status(400).json({
+          error: 'NOT_GRANTED',
+          message: `${guest.name} has not been allowed to use the Small Model. Review it in Settings → Extensions.`,
+        });
+      }
+      const parsed = generateBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'invalid-request' });
+      }
+      const { directory } = await resolveOptionalProjectDirectory(req);
+      const { generateSmallModelText } = await getSmallModelService();
+      let generated;
+      try {
+        generated = await generateSmallModelText({
+          prompt: parsed.data.prompt,
+          system: parsed.data.system,
+          maxOutputTokens: parsed.data.maxOutputTokens,
+          directory: directory || undefined,
+        });
+      } catch (error) {
+        const statusCode = Number(error?.statusCode) || 500;
+        if (statusCode === 404 || statusCode === 422) {
+          return res.status(400).json({
+            error: 'NO_MODEL',
+            message: 'No Small Model is available. Choose one in Settings → Sessions → Small Model.',
+          });
+        }
+        // The provider's error line names the model and status, never the prompt.
+        console.error('Guest small-model generation failed:', error?.message ?? error?.code ?? 'error');
+        return res.status(502).json({ error: 'MODEL_FAILED', message: 'The Small Model could not complete this request.' });
+      }
+      res.json({ ok: true, result: { text: String(generated?.text ?? '').slice(0, GUEST_GENERATE_TEXT_MAX) } });
+    } catch (error) {
+      console.error('Failed to run guest generation:', error?.code ?? error?.name ?? 'error');
+      res.status(500).json({ error: 'Failed to run guest generation' });
     }
   });
 

@@ -84,10 +84,19 @@ host.onReady((ctx) => {
   mountButton(actions, { label: 'Start session', variant: 'outline', onClick: () => void report('startSession', () => host.startSession({ ...payload(), worktree })) });
   mountButton(actions, { label: 'Compose prompt', variant: 'ghost', onClick: () => void report('prompt (compose)', () => host.prompt({ text: `Please look at ${current().id}: ${current().title}` })) });
   mountButton(actions, { label: 'Send prompt', variant: 'destructive', onClick: () => void report('prompt (send)', () => host.prompt({ text: `Summarize what ${current().id} (${current().title}) would need.`, send: true })) });
+  mountButton(actions, { label: 'Draft summary', variant: 'outline', onClick: () => void report('generate', async () => {
+    const { text } = await host.generate({
+      prompt: `${current().id}: ${current().title}`,
+      system: 'Write one sentence describing what finishing this task involves. Return only the sentence.',
+      maxOutputTokens: 120,
+    });
+    await host.compose({ text, mode: 'replace' });
+    return text.slice(0, 80);
+  }) });
   if (ctx.surface === 'dialog') {
     mountButton(actions, { label: 'Close', variant: 'ghost', size: 'sm', onClick: () => void host.close() });
   }
   mountCheckbox(page, { label: 'Start sessions on a new worktree', checked: worktree, onChange: (v) => { worktree = v; } });
-  mountBanner(page, { tone: 'info', title: 'What this tests', body: 'attach and sessionLink need no capability. startSession needs "sessions" (and "prompt" because it sends text). Send prompt needs "prompt". Type /task DEMO-2 in the chat to attach through a command; the rail badge counts open tasks; "Create task from message" and "Summarize session" are in the message and session menus.' });
+  mountBanner(page, { tone: 'info', title: 'What this tests', body: 'attach and sessionLink need no capability. startSession needs "sessions" (and "prompt" because it sends text). Send prompt needs "prompt". Draft summary needs "model": it asks the Small Model for one sentence and puts it in the chat box. Type /task DEMO-2 in the chat to attach through a command; the rail badge counts open tasks; "Create task from message" and "Summarize session" are in the message and session menus.' });
   paint();
 });

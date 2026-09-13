@@ -58,6 +58,7 @@ Access tokens never appear here or in a `request` result.
 | `writeFile(path, content)` | write a text file atomically, creating parent folders. Returns `{ written: true }`. |
 | `listDir(path)` | list a folder. Returns `{ entries: [{ name, kind }] }`, `kind` is `file`, `directory`, or `other`. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` is `file`, `directory`, `other`, or `missing`. |
+| `generate({ prompt, system?, maxOutputTokens? })` | one-off text from the user's Small Model. Returns `{ text }`. Needs the `model` capability. |
 | `onResolve(handler)` | register the handler for your slash commands. It gets `{ command, args }` and returns an attach item or `null`. |
 | `setBadge(count)` | show a number (0 to 999) on your rail icon, or `null` to clear it |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Limits: path up to 1024 characters, content up to 2,000,000 characters, listing up to 2000 entries. Over the content limit is `FILE_TOO_LARGE`.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` is 1 to 64,000 characters after trim, `system` up to 8,000, `maxOutputTokens` 1 to 4,000. Nothing enters a session and no history is kept; the extension never chooses the model. The call waits up to 90 seconds. No usable Small Model is `NO_MODEL`; a model error is `MODEL_FAILED`. See [Generate text](/sdk/#generate-text).
+
 ## Error codes
 
 Failed calls throw `HostRequestError`. `code` is one of these; `message` says more.
@@ -196,6 +205,8 @@ Failed calls throw `HostRequestError`. `code` is one of these; `message` says mo
 | `NOT_FOUND` | `readFile` on a file that does not exist |
 | `FILE_TOO_LARGE` | file content over the limit, on read or write |
 | `DENIED` | the operating system refused the file operation |
+| `NO_MODEL` | `generate` with no Small Model available |
+| `MODEL_FAILED` | the Small Model returned an error |
 
 ## Related
 

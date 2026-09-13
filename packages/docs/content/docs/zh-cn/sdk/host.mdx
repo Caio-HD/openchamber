@@ -58,6 +58,7 @@ const host = connectHost();
 | `writeFile(path, content)` | 原子地写入文本文件，并创建父文件夹。返回 `{ written: true }`。 |
 | `listDir(path)` | 列出文件夹。返回 `{ entries: [{ name, kind }] }`，`kind` 为 `file`、`directory` 或 `other`。 |
 | `stat(path)` | `{ kind, size, mtime }`，`kind` 为 `file`、`directory`、`other` 或 `missing`。 |
+| `generate({ prompt, system?, maxOutputTokens? })` | 来自用户 Small Model 的一次性文本。返回 `{ text }`。需要 `model` 能力。 |
 | `onResolve(handler)` | 注册你的斜杠命令处理函数。它收到 `{ command, args }`，返回一个要附加的条目或 `null`。 |
 | `setBadge(count)` | 在你的侧栏图标上显示一个数字（0 到 999），或传 `null` 清除 |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 限制：路径最长 1024 个字符，内容最多 2,000,000 个字符，列表最多 2000 项。内容超出限制为 `FILE_TOO_LARGE`。
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` 在修剪后为 1 到 64,000 个字符，`system` 最多 8,000 个字符，`maxOutputTokens` 为 1 到 4,000。内容不会进入会话，也不保留历史记录；扩展永远不能选择模型。调用最多等待 90 秒。没有可用的 Small Model 是 `NO_MODEL`；模型出错是 `MODEL_FAILED`。见[生成文本](/sdk/#生成文本)。
+
 ## 错误码
 
 失败的调用会抛出 `HostRequestError`。`code` 是下列之一；`message` 提供更多说明。
@@ -196,6 +205,8 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 | `NOT_FOUND` | 对不存在的文件调用 `readFile` |
 | `FILE_TOO_LARGE` | 读取或写入时文件内容超出限制 |
 | `DENIED` | 操作系统拒绝了该文件操作 |
+| `NO_MODEL` | 没有可用的 Small Model 时调用 `generate` |
+| `MODEL_FAILED` | Small Model 返回了错误 |
 
 ## 相关页面
 

@@ -6,6 +6,8 @@ import {
   GUEST_ATTACH_TITLE_MAX,
   GUEST_FILE_CONTENT_MAX,
   GUEST_FILE_PATH_MAX,
+  GUEST_GENERATE_OUTPUT_TOKENS_MAX,
+  GUEST_GENERATE_PROMPT_MAX,
   type GuestMessage,
   type HostMessage,
 } from './contract.ts';
@@ -618,6 +620,41 @@ describe('connectHost', () => {
     const mismatch = host.readFile('a');
     answer(5, 'file-read', { written: true });
     await expect(mismatch).rejects.toMatchObject({ code: 'HOST_REJECTED' });
+    host.dispose();
+  });
+
+  test('generate posts a trimmed prompt, clamps output tokens, and reads text back', async () => {
+    const parent = createFrame();
+    const guest = createFrame();
+    guest.parent = parent.parent;
+    const host = connectHost({ target: guest, acceptSource: () => true });
+    const answer = (index: number, payload: Record<string, unknown>) => {
+      const posted = parent.posted[index] as { id: string; type: string; payload?: unknown };
+      guest.dispatch(new MessageEvent('message', {
+        data: { channel: OPENCHAMBER_SDK_CHANNEL, v: 1, type: 'result', id: posted.id, ok: true, payload },
+      }));
+      return posted;
+    };
+    const generated = host.generate({ prompt: '  Summarize this  ', system: 'Be brief', maxOutputTokens: 99_999 });
+    expect(answer(1, { text: 'Short.' })).toMatchObject({
+      type: 'generate',
+      payload: { prompt: 'Summarize this', system: 'Be brief', maxOutputTokens: GUEST_GENERATE_OUTPUT_TOKENS_MAX },
+    });
+    await expect(generated).resolves.toEqual({ text: 'Short.' });
+
+    const bare = host.generate({ prompt: 'x' });
+    expect(answer(2, { text: '' })).toMatchObject({ payload: { prompt: 'x' } });
+    expect((parent.posted[2] as { payload: Record<string, unknown> }).payload).not.toHaveProperty('system');
+    await expect(bare).resolves.toEqual({ text: '' });
+
+    // A wrong-shaped answer (a request result) is a host refusal.
+    const mismatch = host.generate({ prompt: 'y' });
+    answer(3, { status: 200, body: 'nope' });
+    await expect(mismatch).rejects.toMatchObject({ code: 'HOST_REJECTED' });
+
+    await expect(host.generate({ prompt: '   ' })).rejects.toMatchObject({ code: 'HOST_REJECTED' });
+    await expect(host.generate({ prompt: 'x'.repeat(GUEST_GENERATE_PROMPT_MAX + 1) })).rejects.toMatchObject({ code: 'HOST_REJECTED' });
+    expect(parent.posted).toHaveLength(4);
     host.dispose();
   });
 

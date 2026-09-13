@@ -10,6 +10,7 @@ import {
   type SessionLifecycleEvent,
   type SessionLifecyclePhase,
   type StartSessionRequest,
+  type GenerateRequest,
   type GuestConnection,
   type GuestMessage,
   type GuestRequest,
@@ -25,6 +26,7 @@ import {
 } from '@openchamber/sdk';
 
 import type { GuestFileProxyResult, GuestFileRequest } from '@/lib/guests/files';
+import type { GuestGenerateProxyResult } from '@/lib/guests/generate';
 import type { GuestRequestProxyResult } from '@/lib/guests/oauth';
 
 import { isContextPanelMode, type ContextPanelMode } from '@/lib/surfaces/modes';
@@ -60,6 +62,8 @@ type HostBridgeEffects = {
   >;
   /** One handler for read, write, list, and stat; the pane checks scope and grant, the server does the rest. */
   file: (request: GuestFileRequest) => Promise<GuestFileProxyResult>;
+  /** One-off Small Model text generation; the pane checks the `model` grant, the server picks and calls the model. */
+  generate: (request: GenerateRequest) => Promise<GuestGenerateProxyResult>;
   /** Rail badge for this guest; `null` clears. */
   setBadge: (count: number | null) => void;
   /** The guest answered a host `resolve` with this id. Not a request, so no `result` goes back. */
@@ -323,6 +327,13 @@ export const answerGuestMessage = async (
       return fileResult(message.id, await effects.file({ op: 'list', path: message.payload.path }));
     case 'file-stat':
       return fileResult(message.id, await effects.file({ op: 'stat', path: message.payload.path }));
+    case 'generate': {
+      const result = await effects.generate(message.payload);
+      if (!result.ok) {
+        return errorResult(message.id, result.message, result.code);
+      }
+      return okResult(message.id, result.result);
+    }
     case 'badge':
       effects.setBadge(message.payload.count);
       return okResult(message.id);

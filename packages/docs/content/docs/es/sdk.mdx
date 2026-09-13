@@ -92,7 +92,7 @@ Tu página puede saber en cuál de los dos está gracias a `ctx.surface` (`panel
 
 `contributes.integration` es opcional. Añade una tarjeta en Ajustes → Integraciones donde el usuario conecta una cuenta. Consulta [Cuentas y red](#cuentas-y-red).
 
-`contributes.service` es opcional. Declara un servicio local (un proceso que OpenChamber inicia junto a la extensión) para cosas a las que una página web no puede llegar, como un socket de Docker. Consulta el archivo `GUEST_SERVICES.md` del paquete.
+`contributes.service` es opcional. Declara un servicio local (un proceso que OpenChamber inicia junto a la extensión) para cosas a las que una página web no puede llegar, como un socket de Docker. Ese proceso se ejecuta con el acceso completo del usuario y sin sandbox, así que el diálogo de aprobación avisa sobre ello; declara uno solo cuando la página no pueda hacer el trabajo. Consulta el archivo `GUEST_SERVICES.md` del paquete.
 
 ## Capacidades
 
@@ -103,10 +103,25 @@ Dibujar un panel y leer la sesión actual no requiere permisos. Todo lo que act�
 | `prompt` | enviar mensajes a la sesión del usuario (`prompt({ send: true })`, `startSession` con `text`) |
 | `sessions` | crear sesiones y worktrees (`startSession`) |
 | `files` | leer y escribir archivos dentro del proyecto abierto (`readFile`, `writeFile`, `listDir`, `stat` con una ruta relativa) |
+| `model` | generación de texto puntual con el Small Model del usuario (`generate`), fuera de cualquier sesión |
 
 Otras cuatro se añaden por ti: `network` cuando declaras una `integration`, `service` cuando declaras un `service`, `filesystem` cuando declaras patrones `filesystem`, y `conversation` cuando una acción de sesión pide los mensajes (ver [Acciones, comandos y la insignia](#acciones-comandos-y-la-insignia)).
 
 El usuario ve la lista completa una vez, al instalar la extensión, y la aprueba o quita la extensión. Si una versión nueva pide más, el diálogo vuelve a aparecer. Una llamada que necesita una capacidad que el usuario no ha aprobado falla con `NOT_GRANTED`.
+
+## Generar texto
+
+Con la capacidad `model`, `host.generate` pide al Small Model del usuario una respuesta puntual: un resumen, un título, un borrador. Nada entra en una sesión, no se guarda historial, y la extensión nunca elige un proveedor. OpenChamber usa el mismo modelo que usa para su propio trabajo en segundo plano, elegido en Ajustes → Sesiones → Small Model, o seleccionado automáticamente entre los proveedores con sesión iniciada del usuario.
+
+```ts
+const { text } = await host.generate({
+  prompt: task.description,
+  system: "Write a one-line summary. Return only the summary.",
+  maxOutputTokens: 200,
+});
+```
+
+Cuando no hay ningún modelo disponible, la llamada falla con `NO_MODEL`; un modelo que dio error es `MODEL_FAILED`. Los prompts están limitados a 64.000 caracteres, y la llamada espera hasta 90 segundos. El usuario ve este permiso como "Usar tu Small Model" y le cuesta tokens, así que mantén los prompts cortos y llámalo al hacer clic, no en cada pulsación de tecla.
 
 ## Cuentas y red
 

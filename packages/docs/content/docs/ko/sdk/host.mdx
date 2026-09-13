@@ -58,6 +58,7 @@ const host = connectHost();
 | `writeFile(path, content)` | 텍스트 파일을 원자적으로 쓰고, 상위 폴더도 만듦. `{ written: true }`를 반환. |
 | `listDir(path)` | 폴더 목록. `{ entries: [{ name, kind }] }`를 반환하며, `kind`는 `file`, `directory`, `other` 중 하나. |
 | `stat(path)` | `{ kind, size, mtime }`. `kind`는 `file`, `directory`, `other`, `missing` 중 하나. |
+| `generate({ prompt, system?, maxOutputTokens? })` | 사용자의 Small Model에서 일회성 텍스트를 받습니다. `{ text }`를 반환합니다. `model` 권한이 필요합니다. |
 | `onResolve(handler)` | 슬래시 명령의 핸들러를 등록합니다. `{ command, args }`를 받고 첨부할 항목 또는 `null`을 반환합니다. |
 | `setBadge(count)` | 레일 아이콘에 숫자(0부터 999까지)를 표시하고, `null`이면 지웁니다 |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 제한: 경로는 최대 1024자, 내용은 최대 2,000,000자, 목록은 최대 2000개 항목. 내용 제한을 넘으면 `FILE_TOO_LARGE`입니다.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt`는 트림 후 1자에서 64,000자, `system`은 최대 8,000자, `maxOutputTokens`는 1에서 4,000입니다. 세션에는 아무것도 들어가지 않고 기록도 남지 않으며, 확장이 모델을 고르는 일도 없습니다. 호출은 최대 90초까지 기다립니다. 쓸 수 있는 Small Model이 없으면 `NO_MODEL`이고, 모델 오류는 `MODEL_FAILED`입니다. [텍스트 생성](/sdk/#텍스트-생성)을 참고하세요.
+
 ## 오류 코드
 
 실패한 호출은 `HostRequestError`를 throw합니다. `code`는 다음 중 하나이며, `message`에 자세한 내용이 있습니다.
@@ -196,6 +205,8 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 | `NOT_FOUND` | 존재하지 않는 파일에 대한 `readFile` |
 | `FILE_TOO_LARGE` | 읽기 또는 쓰기 시 파일 내용이 제한을 넘음 |
 | `DENIED` | 운영 체제가 파일 작업을 거부함 |
+| `NO_MODEL` | 사용할 수 있는 Small Model 없이 `generate` 호출 |
+| `MODEL_FAILED` | Small Model이 오류를 반환함 |
 
 ## 관련 문서
 

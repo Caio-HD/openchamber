@@ -92,7 +92,7 @@ Votre page sait dans lequel des deux elle se trouve grâce à `ctx.surface` (`pa
 
 `contributes.integration` est optionnel. Il ajoute une carte dans Paramètres → Intégrations où l'utilisateur connecte un compte. Voir [Comptes et réseau](#comptes-et-réseau).
 
-`contributes.service` est optionnel. Il déclare un service local (un processus qu'OpenChamber démarre à côté de l'extension) pour ce qu'une page web ne peut pas atteindre, comme un socket Docker. Voir le fichier `GUEST_SERVICES.md` du package.
+`contributes.service` est optionnel. Il déclare un service local (un processus qu'OpenChamber démarre à côté de l'extension) pour ce qu'une page web ne peut pas atteindre, comme un socket Docker. Ce processus s'exécute avec l'accès complet de l'utilisateur et sans sandbox, c'est pourquoi la boîte de dialogue d'approbation en avertit ; déclarez-en un seulement quand la page ne peut pas faire le travail. Voir le fichier `GUEST_SERVICES.md` du package.
 
 ## Capacités
 
@@ -103,10 +103,25 @@ Dessiner un panneau et lire la session en cours ne demandent aucune permission. 
 | `prompt` | envoyer des messages dans la session de l'utilisateur (`prompt({ send: true })`, `startSession` avec `text`) |
 | `sessions` | créer des sessions et des worktrees (`startSession`) |
 | `files` | lire et écrire des fichiers dans le projet ouvert (`readFile`, `writeFile`, `listDir`, `stat` avec un chemin relatif) |
+| `model` | génération de texte ponctuelle avec le Small Model de l'utilisateur (`generate`), en dehors de toute session |
 
 Quatre autres sont ajoutées pour vous : `network` quand vous déclarez une `integration`, `service` quand vous déclarez un `service`, `filesystem` quand vous déclarez des motifs `filesystem`, et `conversation` quand une action de session demande les messages (voir [Actions, commandes et le badge](#actions-commandes-et-le-badge)).
 
 L'utilisateur voit la liste complète une seule fois, à l'installation de l'extension, et l'approuve ou supprime l'extension. Si une nouvelle version demande davantage, la boîte de dialogue réapparaît. Un appel qui a besoin d'une capacité non approuvée par l'utilisateur échoue avec `NOT_GRANTED`.
+
+## Générer du texte
+
+Avec la capacité `model`, `host.generate` demande au Small Model de l'utilisateur une réponse ponctuelle : un résumé, un titre, un brouillon. Rien n'entre dans une session, aucun historique n'est conservé, et l'extension ne choisit jamais de fournisseur. OpenChamber utilise le même modèle que pour son propre travail en arrière-plan, choisi dans Paramètres → Sessions → Small Model, ou sélectionné automatiquement parmi les fournisseurs connectés de l'utilisateur.
+
+```ts
+const { text } = await host.generate({
+  prompt: task.description,
+  system: "Write a one-line summary. Return only the summary.",
+  maxOutputTokens: 200,
+});
+```
+
+Quand aucun modèle n'est disponible, l'appel échoue avec `NO_MODEL` ; un modèle qui a échoué donne `MODEL_FAILED`. Les prompts sont limités à 64 000 caractères, et l'appel attend jusqu'à 90 secondes. L'utilisateur voit cette permission sous le nom « Utiliser ton Small Model » et cela lui coûte des tokens, donc gardez les prompts courts et déclenchez l'appel sur un clic, pas à chaque frappe.
 
 ## Comptes et réseau
 

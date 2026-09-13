@@ -170,6 +170,21 @@ describe('parseManifest', () => {
     expect(requestedGuestCapabilities({ capabilities: ['files'] })).toEqual(['files']);
   });
 
+  test('accepts model in capabilities and keeps it in the requested list', () => {
+    const result = parseManifest({
+      apiVersion: 1,
+      contributes: {
+        panel: validBlock.contributes.panel,
+        capabilities: ['model', 'prompt'],
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.contributes.capabilities).toEqual(['model', 'prompt']);
+      expect(requestedGuestCapabilities(result.manifest.contributes)).toEqual(['prompt', 'model']);
+    }
+  });
+
   test('rejects filesystem patterns that are relative, escape, or are empty', () => {
     const attempt = (filesystem: unknown) => parseManifest({
       apiVersion: 1,

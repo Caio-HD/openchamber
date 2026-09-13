@@ -159,13 +159,8 @@ Ship `service/main.js` already built. Same packaging rule as `panel/main.js`.
 - Panel → host → service loopback only. No panel → socket.
 - `serviceRequest` path must stay on that service (host-allocated port for that guest id).
 - Every service requires an explicit grant before proxy.
-- Permissions text is advisory. Phase 1 does not enforce an OS sandbox around those lists.
+- Permissions text is advisory. Phase 1 does not enforce an OS sandbox around those lists: an allowed service can run any command, use git, and read or write any file the user can. The approval dialog says so in plain words.
 
-## Examples
+## Example
 
-Local samples under `examples/` (gitignored):
-
-- `examples/docker` — CLI via `exec: ["docker"]`
-- `examples/docker-sock` — Engine API over the resolved `docker` socket
-
-Bundle the panel, install from Settings → Extensions as a folder or a zip of the built files, allow the local service, then open the rail panel. Shell into containers is deferred (needs SDK streaming; only with maintainer approval).
+`examples/service-echo` is a checked-in service extension: a Node HTTP server on loopback that the panel calls through `serviceRequest` and whose status it shows. Bundle the service with `--node`, install the folder from Settings → Extensions, allow the local service in the approval dialog, then open the rail panel. Streaming from a service to the panel (shell into a container, log tails) is deferred; it needs a streaming call on the SDK first.

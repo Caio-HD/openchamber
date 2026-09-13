@@ -66,6 +66,8 @@ const requiredKeys = [
   'settings.extensions.capability.network.detail',
   'settings.extensions.capability.files',
   'settings.extensions.capability.files.detail',
+  'settings.extensions.capability.model',
+  'settings.extensions.capability.model.detail',
   'settings.extensions.capability.filesystem',
   'settings.extensions.capability.filesystem.detail',
   'settings.extensions.capability.conversation',

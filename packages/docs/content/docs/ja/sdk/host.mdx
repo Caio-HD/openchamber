@@ -58,6 +58,7 @@ const host = connectHost();
 | `writeFile(path, content)` | テキストファイルをアトミックに書き、親フォルダも作成する。`{ written: true }` を返す。 |
 | `listDir(path)` | フォルダを一覧する。`{ entries: [{ name, kind }] }` を返し、`kind` は `file`、`directory`、`other` のいずれか。 |
 | `stat(path)` | `{ kind, size, mtime }`。`kind` は `file`、`directory`、`other`、`missing` のいずれか。 |
+| `generate({ prompt, system?, maxOutputTokens? })` | ユーザーの Small Model による一回限りのテキスト。`{ text }` を返す。`model` 権限が必要。 |
 | `onResolve(handler)` | スラッシュコマンドのハンドラーを登録する。`{ command, args }` を受け取り、添付する項目または `null` を返す。 |
 | `setBadge(count)` | レールのアイコンに数字(0 から 999)を表示する。`null` で消す |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 上限: パスは 1024 文字まで、内容は 2,000,000 文字まで、一覧は 2000 件まで。内容の上限を超えると `FILE_TOO_LARGE` です。
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` はトリム後 1 から 64,000 文字、`system` は 8,000 文字まで、`maxOutputTokens` は 1 から 4,000 です。何もセッションには入らず、履歴も残りません。拡張機能がモデルを選ぶことはありません。呼び出しは最大 90 秒待ちます。使える Small Model がない場合は `NO_MODEL`、モデルがエラーを返した場合は `MODEL_FAILED` です。[テキストを生成する](/sdk/#テキストを生成する) を参照してください。
+
 ## エラーコード
 
 失敗した呼び出しは `HostRequestError` を throw します。`code` は次のいずれかで、`message` に詳細が入ります。
@@ -196,6 +205,8 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 | `NOT_FOUND` | 存在しないファイルに対する `readFile` |
 | `FILE_TOO_LARGE` | 読み込みまたは書き込み時にファイル内容が上限を超えた |
 | `DENIED` | オペレーティングシステムがファイル操作を拒否した |
+| `NO_MODEL` | 利用できる Small Model がない状態での `generate` |
+| `MODEL_FAILED` | Small Model がエラーを返した |
 
 ## 関連
 

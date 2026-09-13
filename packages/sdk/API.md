@@ -1,6 +1,6 @@
 # @openchamber/sdk — developer API reference
 
-What third-party guest authors import and call. Source of truth: `[packages/sdk/src](https://github.com/openchamber/openchamber/tree/sdk/packages/sdk/src)`. Longer guides live in the [product docs](https://github.com/openchamber/openchamber/tree/sdk/packages/docs/content/docs) (`sdk.mdx`, `sdk/host.mdx`, `sdk/ui.mdx`) and in `[GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/GUEST_SERVICES.md)` for local services.
+What third-party guest authors import and call. Source of truth: `[packages/sdk/src](https://github.com/openchamber/openchamber/tree/main/packages/sdk/src)`. Longer guides live in the [product docs](https://github.com/openchamber/openchamber/tree/main/packages/docs/content/docs) (`sdk.mdx`, `sdk/host.mdx`, `sdk/ui.mdx`) and in `[GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md)` for local services.
 
 **Package:** `@openchamber/sdk`  
 **API version:** manifest `apiVersion: 1`, wire envelope `v: 1`  
@@ -19,7 +19,7 @@ Two entrypoints:
 
 ## Ship checklist (install fails without these)
 
-`inspectGuestPackage` (Settings → Extensions install) checks the folder or zip **on disk**. Parse alone is not enough. Packaged OpenChamber and `openchamber serve` run on Node and will **not** compile TypeScript. `oc-dev` on Bun may compile `panel/main.ts` when serving; install still wants the built `.js` files present.
+`inspectGuestPackage` (Settings → Extensions install) checks the folder or zip **on disk**. Parse alone is not enough. No OpenChamber runtime compiles TypeScript: packaged desktop, `openchamber serve`, and the dev server all serve the built `.js` files as they sit in the package.
 
 
 | Must exist                                                                       | When                                            | Failure code       |
@@ -44,7 +44,7 @@ bunx openchamber-guest-bundle panel/main.ts panel/main.js
 bunx openchamber-guest-bundle --node service/main.ts service/main.js
 ```
 
-Zip or folder for install should include at least: `package.json`, `panel/index.html`, `panel/main.js`, and any declared `icon.svg` / `service/main.js`. Skip `node_modules` and TypeScript sources. Zip and git installs land in `{dataDir}/extensions/{id}`. See also `[GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/GUEST_SERVICES.md)`.
+Zip or folder for install should include at least: `package.json`, `panel/index.html`, `panel/main.js`, and any declared `icon.svg` / `service/main.js`. Skip `node_modules` and TypeScript sources. Zip and git installs land in `{dataDir}/extensions/{id}`. See also `[GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md)`.
 
 ---
 
@@ -99,7 +99,7 @@ type GuestMessageItem = {
   action: string;          // the action id from the manifest
   sessionId: string;
   sessionTitle: string;
-  directory: string;
+  directory: string | null;  // the session's project directory
   messageId: string;
   role: 'user' | 'assistant';
   text: string;            // what the Markdown export renders for that message, at most 200 000 chars
@@ -110,7 +110,7 @@ type GuestSessionItem = {
   action: string;
   sessionId: string;
   sessionTitle: string;
-  directory: string;
+  directory: string | null;  // the session's project directory
   messages?: Array<{ id: string; role: 'user' | 'assistant'; text: string; createdAt: number }>; // oldest first; only with payload ["messages"] and the conversation grant
   truncated?: boolean;     // the oldest messages were dropped so the item stays under 2 000 000 serialized chars
 };
@@ -146,6 +146,7 @@ Access tokens never appear in `ready` or in request results.
 | `listDir`         | `path: string`                    | `Promise<{ entries }>`         | `{ name, kind: 'file' \| 'directory' \| 'other' }[]`, sorted, capped at 2 000. Same path rules |
 | `stat`            | `path: string`                    | `Promise<{ kind, size, mtime }>` | `kind` adds `'missing'`; a missing path is not an error. Same path rules              |
 | `setBadge`        | `count: number \| null`          | `Promise<void>`                | Number on this guest's rail icon, 0–999 (clamped); `null` clears. Opening the panel clears it too. In memory only |
+| `generate`        | `{ prompt, system?, maxOutputTokens? }` | `Promise<{ text }>`      | One-off text from the user's Small Model (capability `model`). No session, no history; the host picks the model. Waits up to 90 s |
 | `dispose`         | —                                 | `void`                         | Remove listener, reject pending RPCs                                                  |
 
 
@@ -195,6 +196,8 @@ Access tokens never appear in `ready` or in request results.
 | `NOT_FOUND`        | `readFile` / `listDir` on a path that does not exist |
 | `FILE_TOO_LARGE`   | File or content over 2 000 000 characters     |
 | `DENIED`           | The operating system refused the file access  |
+| `NO_MODEL`         | `generate` with no usable Small Model         |
+| `MODEL_FAILED`     | The Small Model returned an error             |
 | `SERVICE_FAILED`     | Service crashed or never became ready           |
 
 
@@ -222,6 +225,10 @@ Access tokens never appear in `ready` or in request results.
 | File path                        | 1 024     |
 | File content (read and write)    | 2 000 000 |
 | `listDir` entries                | 2 000     |
+| `generate` prompt / system       | 64 000 / 8 000 |
+| `generate` `maxOutputTokens`     | 4 000     |
+| `generate` answer                | 256 000   |
+| `generate` timeout               | 90 000 ms |
 
 
 ---
@@ -335,13 +342,13 @@ Used by the OpenChamber host and by tools that validate packages. Guests rarely 
 | `panel.icon`          | Remixicon kebab name (`window`) **or** package `.svg` path. Remixicon needs no file. An `.svg` path must exist on disk or install fails (`invalid-manifest`). No URLs/absolute paths |
 | `panel.entry`         | Optional. Path inside package. No `..`, absolute, or URL. HTML must exist; its relative `.js` scripts must exist (`missing-build` if not). Omit it for a page-less extension: then only `tools` (plus `engines` and `version`) may be declared; `attach`, `actions`, `commands`, `service`, `integration`, `capabilities`, or `filesystem` without an entry fail parse as `invalid-panel`. A page-less extension has no rail icon, + menu row, or frame; the Extensions card says "No panel". `hasGuestPage(contributes)` tells the two apart |
 | `attach`              | `true` / `"panel"` → + menu opens rail; `"dialog"` → host window; omit/`false` → off menus. Object form `{ "mode": "panel" \| "dialog", "entry"?: "panel/attach.html" }`: `entry` (dialog only, same path rules as `panel.entry`, must exist with built scripts) is the page the dialog loads instead of `panel.entry` |
-| `capabilities`        | Optional list of `prompt`, `sessions`, `files`. `files` is read **and** write inside the open project. Approved once at install                                                     |
+| `capabilities`        | Optional list of `prompt`, `sessions`, `files`, `model`. `files` is read **and** write inside the open project; `model` is `generate`. Approved once at install                     |
 | `actions`             | Optional, 1–8 entries, unique kebab-case `id`, `label` 1–40 chars, optional `icon` (same rules as `panel.icon`, falls back to it), `where: "message" \| "session"`. Message actions may narrow `roles` to `["user"]` / `["assistant"]` (default both); session actions may ask for `payload: ["messages"]`, which adds the `conversation` capability. Bad shape is `invalid-actions`. The entry shows in that message's or session's menu and opens the guest with the item as `ready.item` (the attach window for `attach: "dialog"`, otherwise the rail) |
 | `commands`            | Optional, 1–8 entries, unique `name` matching `/^[a-z][a-z0-9-]{0,23}$/`, optional `description` 1–80 chars (`invalid-commands`). `/name args` in the chat box calls `onResolve` instead of the model and attaches what it returns. A name the composer already has (built-in, OpenCode command, skill) is ignored with a console warning |
 | `tools`               | Optional, 1–16 entries that say how the extension's tool calls look in the chat. `match` is the full tool name OpenCode reports (`mcp.jira.search`, `jira_search`), 1–128 chars of `[A-Za-z0-9_.:-]`, with `*` allowed once at the end as a suffix wildcard (`mcp.jira.*`). Optional `name` (1–40, the header title when `title` is absent or renders empty), `icon` (Remixicon name or package `.svg` path, same rules as `panel.icon`; the SVG is drawn in the text colour at the glyph size), `title` / `subtitle` templates (1–200, `{input.path}` / `{output.path}` / `{metadata.path}` placeholders, a missing path renders empty, values are cut at 200), `output` `"auto"` (default) \| `"text"` \| `"json"` \| `"markdown"` \| `"code"` \| `"table"`, `language` (code only), `columns` (table only, 1–16 dotted paths; rows are the output array or `output.items`). Bad shape is `invalid-tools`. An exact `match` beats a wildcard from any extension; among equals the first extension wins. Only an enabled, fully approved extension's rules apply |
 | `filesystem`          | Optional, 1–16 globs, each 1–256 chars, starting with `/` or `~/`; `**` spans folders, `*` / `?` stay in one segment; no `..`, empty segment, or backslash (`invalid-filesystem`). Declaring it adds the `filesystem` capability and the dialog lists the globs |
 | `integration`         | Optional. Exactly one of `oauth`, `token`, or `host` (`provider: "linear"` only)                                                                                                     |
-| `service`               | Optional. `entry` must be a built `.js` file on disk. See [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/GUEST_SERVICES.md)                        |
+| `service`               | Optional. `entry` must be a built `.js` file on disk. See [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md)                        |
 
 
 Extra keys are dropped, not forwarded.
@@ -407,7 +414,7 @@ Bundle the service with the Node target:
 bunx openchamber-guest-bundle --node service/main.ts service/main.js
 ```
 
-Full contract (env vars, `/health`, grants, socket overrides): `[GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/GUEST_SERVICES.md)`.
+Full contract (env vars, `/health`, grants, socket overrides): `[GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md)`.
 
 ---
 
@@ -417,9 +424,9 @@ Frozen on `apiVersion` 1 — named in docs, no host hole yet:
 
 - Host-side `issues.search` / `issues.get` (guest draws the list; chip is `attach`)
 - Public OAuth broker
-- Commands, shortcuts, raw git remotes, magic prompts
+- Keyboard shortcuts, raw git remotes, magic prompts
 - Second `host.provider` beyond Linear
-- Arbitrary filesystem access (only the open project with `files`, or declared `contributes.filesystem` globs), terminal, pairing, or host React components from the guest
+- Arbitrary filesystem access from the page (only the open project with `files`, or declared `contributes.filesystem` globs), terminal, pairing, or host React components. A declared `service` is outside these limits: it is a process with the user's rights and no sandbox
 
 Do not go around the guest contract through `RuntimeAPIs`.
 
@@ -478,10 +485,10 @@ host.onConnection(async (connection) => {
 
 | File                                                                                                                                                                                                                                                                                                                      | Audience                          |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| [README.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/README.md)                                                                                                                                                                                                                                   | Package overview and first hole   |
-| [DOCUMENTATION.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/DOCUMENTATION.md)                                                                                                                                                                                                                     | Agent / maintainer invariants     |
-| [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/GUEST_SERVICES.md)                                                                                                                                                                                                                       | Local service contract              |
-| [src/ui/DOCUMENTATION.md](https://github.com/openchamber/openchamber/blob/sdk/packages/sdk/src/ui/DOCUMENTATION.md)                                                                                                                                                                                                       | UI kit invariants                 |
-| [sdk.mdx](https://github.com/openchamber/openchamber/blob/sdk/packages/docs/content/docs/sdk.mdx) / [sdk/host.mdx](https://github.com/openchamber/openchamber/blob/sdk/packages/docs/content/docs/sdk/host.mdx) / [sdk/ui.mdx](https://github.com/openchamber/openchamber/blob/sdk/packages/docs/content/docs/sdk/ui.mdx) | Author-facing website pages       |
+| [README.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/README.md)                                                                                                                                                                                                                                   | Package overview and first hole   |
+| [DOCUMENTATION.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/DOCUMENTATION.md)                                                                                                                                                                                                                     | Agent / maintainer invariants     |
+| [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md)                                                                                                                                                                                                                       | Local service contract              |
+| [src/ui/DOCUMENTATION.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/src/ui/DOCUMENTATION.md)                                                                                                                                                                                                       | UI kit invariants                 |
+| [sdk.mdx](https://github.com/openchamber/openchamber/blob/main/packages/docs/content/docs/sdk.mdx) / [sdk/host.mdx](https://github.com/openchamber/openchamber/blob/main/packages/docs/content/docs/sdk/host.mdx) / [sdk/ui.mdx](https://github.com/openchamber/openchamber/blob/main/packages/docs/content/docs/sdk/ui.mdx) | Author-facing website pages       |
 
 

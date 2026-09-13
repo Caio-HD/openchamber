@@ -58,6 +58,7 @@ Los tokens de acceso nunca aparecen aquí ni en el resultado de un `request`.
 | `writeFile(path, content)` | escribe un archivo de texto de forma atómica, creando las carpetas superiores. Devuelve `{ written: true }`. |
 | `listDir(path)` | lista una carpeta. Devuelve `{ entries: [{ name, kind }] }`, `kind` es `file`, `directory` u `other`. |
 | `stat(path)` | `{ kind, size, mtime }`, `kind` es `file`, `directory`, `other` o `missing`. |
+| `generate({ prompt, system?, maxOutputTokens? })` | texto puntual del Small Model del usuario. Devuelve `{ text }`. Necesita la capacidad `model`. |
 | `onResolve(handler)` | registra el manejador de tus comandos de barra. Recibe `{ command, args }` y devuelve un elemento para adjuntar o `null`. |
 | `setBadge(count)` | muestra un número (0 a 999) en tu icono de la barra lateral, o `null` para quitarlo |
 
@@ -174,6 +175,14 @@ const info = await host.stat("~/.config/opencode/opencode.json");
 
 Límites: ruta de hasta 1024 caracteres, contenido de hasta 2,000,000 caracteres, listado de hasta 2000 entradas. Superar el límite de contenido es `FILE_TOO_LARGE`.
 
+## generate
+
+```ts
+const { text } = await host.generate({ prompt: notes, system: "Summarize in one sentence." });
+```
+
+`prompt` es de 1 a 64.000 caracteres tras recortar espacios, `system` hasta 8.000, `maxOutputTokens` de 1 a 4.000. Nada entra en una sesión y no se guarda historial; la extensión nunca elige el modelo. La llamada espera hasta 90 segundos. No tener ningún Small Model utilizable es `NO_MODEL`; un error del modelo es `MODEL_FAILED`. Consulta [Generar texto](/sdk/#generar-texto).
+
 ## Códigos de error
 
 Las llamadas fallidas lanzan `HostRequestError`. `code` es uno de estos; `message` da más detalles.
@@ -196,6 +205,8 @@ Las llamadas fallidas lanzan `HostRequestError`. `code` es uno de estos; `messag
 | `NOT_FOUND` | `readFile` sobre un archivo que no existe |
 | `FILE_TOO_LARGE` | contenido del archivo por encima del límite, al leer o escribir |
 | `DENIED` | el sistema operativo rechazó la operación sobre el archivo |
+| `NO_MODEL` | `generate` sin ningún Small Model disponible |
+| `MODEL_FAILED` | el Small Model devolvió un error |
 
 ## Relacionado
 
