@@ -21,6 +21,7 @@ const publicIntegrationSchema = z.object({
     scheme: z.enum(['raw', 'bearer', 'basic']),
     usernameLabel: z.string().trim().min(1).optional(),
   }).optional(),
+  apiOrigin: z.string().trim().min(1).optional(),
   settings: z.array(z.object({
     id: z.string().regex(PANEL_ID),
     label: z.string().trim().min(1),

@@ -10,7 +10,7 @@ import {
   isGuestRequestPath,
 } from '@openchamber/sdk';
 
-import { readExtensionStore, writeExtensionStore } from './persist.js';
+import { readExtensionStore, updateExtensionStore } from './persist.js';
 import { resolveServiceSocketEnv } from './sockets.js';
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -78,9 +78,9 @@ const sleep = (ms) => new Promise((resolve) => {
  * @param {number} port
  * @param {string} token
  */
-const waitForServiceReady = async (port, token) => {
+const waitForServiceReady = async (port, token, shouldStop = () => false) => {
   const deadline = Date.now() + SERVICE_READY_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !shouldStop()) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}${SERVICE_HEALTH_PATH}`, {
         method: 'GET',
@@ -105,31 +105,20 @@ const waitForServiceReady = async (port, token) => {
  * @param {string} guestId
  * @param {string} persistPath
  */
-const isServiceGranted = async (guestId, persistPath) => {
-  const store = await readExtensionStore(persistPath);
-  return (store.capabilityGrants?.[guestId] ?? []).includes('service');
-};
-
 /**
  * @param {string} guestId
  * @param {string} persistPath
  * @param {boolean} enabled
  */
 export const setGuestEnabled = async (guestId, persistPath, enabled) => {
-  const store = await readExtensionStore(persistPath);
-  const disabledGuests = { ...(store.disabledGuests ?? {}) };
-  if (enabled) {
-    delete disabledGuests[guestId];
-  } else {
-    disabledGuests[guestId] = true;
-  }
-  await writeExtensionStore(persistPath, {
-    paths: store.paths,
-    sources: store.sources,
-    gitOrigins: store.gitOrigins,
-    capabilityGrants: store.capabilityGrants,
-    disabledGuests,
-    serviceSocketOverrides: store.serviceSocketOverrides,
+  await updateExtensionStore(persistPath, (store) => {
+    const disabledGuests = { ...(store.disabledGuests ?? {}) };
+    if (enabled) {
+      delete disabledGuests[guestId];
+    } else {
+      disabledGuests[guestId] = true;
+    }
+    return { ...store, disabledGuests };
   });
   if (!enabled) {
     await stopGuestService(guestId);
@@ -143,27 +132,21 @@ export const setGuestEnabled = async (guestId, persistPath, enabled) => {
  * @param {string | null} socketPath empty/null clears the override
  */
 export const setServiceSocketOverride = async (guestId, socketId, persistPath, socketPath) => {
-  const store = await readExtensionStore(persistPath);
-  const serviceSocketOverrides = { ...(store.serviceSocketOverrides ?? {}) };
-  const forGuest = { ...(serviceSocketOverrides[guestId] ?? {}) };
-  const trimmed = typeof socketPath === 'string' ? socketPath.trim() : '';
-  if (trimmed) {
-    forGuest[socketId] = trimmed;
-  } else {
-    delete forGuest[socketId];
-  }
-  if (Object.keys(forGuest).length > 0) {
-    serviceSocketOverrides[guestId] = forGuest;
-  } else {
-    delete serviceSocketOverrides[guestId];
-  }
-  await writeExtensionStore(persistPath, {
-    paths: store.paths,
-    sources: store.sources,
-    gitOrigins: store.gitOrigins,
-    capabilityGrants: store.capabilityGrants,
-    disabledGuests: store.disabledGuests,
-    serviceSocketOverrides,
+  await updateExtensionStore(persistPath, (store) => {
+    const serviceSocketOverrides = { ...(store.serviceSocketOverrides ?? {}) };
+    const forGuest = { ...(serviceSocketOverrides[guestId] ?? {}) };
+    const trimmed = typeof socketPath === 'string' ? socketPath.trim() : '';
+    if (trimmed) {
+      forGuest[socketId] = trimmed;
+    } else {
+      delete forGuest[socketId];
+    }
+    if (Object.keys(forGuest).length > 0) {
+      serviceSocketOverrides[guestId] = forGuest;
+    } else {
+      delete serviceSocketOverrides[guestId];
+    }
+    return { ...store, serviceSocketOverrides };
   });
   await stopGuestService(guestId);
 };
@@ -182,7 +165,18 @@ export const getServiceStatus = (guestId) => {
 /**
  * @param {string} guestId
  */
+/**
+ * Bumped by every stop. A start that began before the bump is cancelled: it
+ * checks the epoch after each await and kills whatever it spawned, so Pause
+ * during the seconds before the process is registered still stops it.
+ * @type {Map<string, number>}
+ */
+const stopEpochs = new Map();
+
+const stopEpochOf = (guestId) => stopEpochs.get(guestId) ?? 0;
+
 export const stopGuestService = async (guestId) => {
+  stopEpochs.set(guestId, stopEpochOf(guestId) + 1);
   const runtime = runtimes.get(guestId);
   if (!runtime) {
     return;
@@ -261,6 +255,9 @@ const startGuestService = async ({
   if (existing) {
     await stopGuestService(guestId);
   }
+  const epoch = stopEpochOf(guestId);
+  const cancelled = () => stopEpochOf(guestId) !== epoch;
+  const stoppedError = () => new GuestServiceError('The service was stopped before it became ready.', 'NO_SERVICE');
 
   const absoluteEntry = path.resolve(packageRoot, entry);
   const rootResolved = path.resolve(packageRoot);
@@ -273,11 +270,17 @@ const startGuestService = async ({
     throw new GuestServiceError('Service entry is missing.', 'NO_SERVICE');
   }
 
+  if (cancelled()) {
+    throw stoppedError();
+  }
   const port = await reserveLoopbackPort();
   const token = crypto.randomBytes(24).toString('hex');
   const socketEnv = socketBindings.length > 0
     ? await resolveServiceSocketEnv(socketBindings, socketOverrides)
     : {};
+  if (cancelled()) {
+    throw stoppedError();
+  }
   const env = {
     ...inheritedServiceEnv(process.env),
     OPENCHAMBER_SERVICE_PORT: String(port),
@@ -313,7 +316,15 @@ const startGuestService = async ({
     }
   });
 
-  const ready = await waitForServiceReady(port, token);
+  const ready = await waitForServiceReady(port, token, () => cancelled() || child.exitCode !== null || Boolean(child.signalCode));
+  if (cancelled()) {
+    // Pause landed while the process was coming up; stopGuestService found
+    // this runtime (registered above) and is killing it, or already did.
+    if (runtimes.get(guestId) === runtime) {
+      await stopGuestService(guestId);
+    }
+    throw stoppedError();
+  }
   if (!ready || child.exitCode !== null || child.signalCode) {
     runtime.status = 'failed';
     const detail = output.snapshot();
@@ -388,6 +399,7 @@ const ensureGuestService = async (params) => {
  *   guestId: string,
  *   packageRoot: string,
  *   service: { entry: string, permissions?: { sockets?: Array<{ id: string, candidatesByPlatform?: Partial<Record<'linux' | 'darwin' | 'win32', string[]>> }>, exec?: string[] } },
+ *   granted: string[],
  *   persistPath: string,
  *   method: string,
  *   path: string,
@@ -400,6 +412,7 @@ export const proxyGuestServiceRequest = async ({
   guestName,
   packageRoot,
   service,
+  granted,
   persistPath,
   method,
   path: requestPath,
@@ -423,7 +436,9 @@ export const proxyGuestServiceRequest = async ({
   // Every service is a third-party process running as the user. Declared
   // permissions describe what it intends to touch; they do not confine it, so
   // the grant is required whether or not the manifest declared any.
-  if (!await isServiceGranted(guestId, persistPath)) {
+  // `granted` is the catalog's effective list: it already drops `service`
+  // when the package's permissions changed after the user approved them.
+  if (!Array.isArray(granted) || !granted.includes('service')) {
     throw new GuestServiceError('Allow this extension\'s local service in Settings → Extensions.', 'NO_SERVICE');
   }
 

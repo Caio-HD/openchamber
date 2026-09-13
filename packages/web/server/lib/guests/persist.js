@@ -18,12 +18,38 @@ const storeSchema = z.object({
   // that this build no longer knows (renamed, removed) must not invalidate the
   // whole store and hide every installed extension.
   capabilityGrants: z.record(z.string(), z.array(z.string())).optional(),
+  // What each grant covered when the user approved it: the filesystem
+  // patterns, the API origin, the service's exec names and socket ids. A
+  // newer package that widens any of these is treated as not approved for
+  // that capability. Entries are checked one at a time on read.
+  capabilityScopes: z.record(z.string(), z.unknown()).optional(),
   disabledGuests: z.record(z.string(), z.literal(true)).optional(),
   serviceSocketOverrides: z.record(
     z.string(),
     z.record(z.string(), z.string().min(1).refine((entry) => !entry.includes('\0'))),
   ).optional(),
 });
+
+const capabilityScopeSchema = z.object({
+  filesystem: z.array(z.string().min(1)).optional(),
+  apiOrigin: z.string().min(1).optional(),
+  service: z.object({
+    exec: z.array(z.string().min(1)),
+    sockets: z.array(z.string().min(1)),
+  }).optional(),
+});
+
+/** @returns {Record<string, { filesystem?: string[], apiOrigin?: string, service?: { exec: string[], sockets: string[] } }>} */
+const knownScopesOnly = (scopes) => {
+  const cleaned = {};
+  for (const [guestId, raw] of Object.entries(scopes)) {
+    const parsed = capabilityScopeSchema.safeParse(raw);
+    if (parsed.success) {
+      cleaned[guestId] = parsed.data;
+    }
+  }
+  return cleaned;
+};
 
 const gitOriginSchema = z.object({
   url: z.string().min(1).refine((entry) => !entry.includes('\0')),
@@ -88,6 +114,7 @@ const emptyStore = () => ({
   sources: {},
   gitOrigins: {},
   capabilityGrants: {},
+  capabilityScopes: {},
   disabledGuests: {},
   serviceSocketOverrides: {},
 });
@@ -110,6 +137,7 @@ export const readExtensionStore = async (persistPath) => {
       sources: parsed.sources ?? {},
       gitOrigins: knownGitOriginsOnly(parsed.gitOrigins ?? {}),
       capabilityGrants: knownGrantsOnly(parsed.capabilityGrants ?? {}),
+      capabilityScopes: knownScopesOnly(parsed.capabilityScopes ?? {}),
       disabledGuests: parsed.disabledGuests ?? {},
       serviceSocketOverrides: parsed.serviceSocketOverrides ?? {},
     };
@@ -121,13 +149,14 @@ export const readExtensionStore = async (persistPath) => {
   }
 };
 
-export const writeExtensionStore = async (
+const writeExtensionStoreUnlocked = async (
   persistPath,
   {
     paths,
     sources = {},
     gitOrigins = {},
     capabilityGrants = {},
+    capabilityScopes = {},
     disabledGuests = {},
     serviceSocketOverrides = {},
   },
@@ -150,6 +179,13 @@ export const writeExtensionStore = async (
   for (const [id, granted] of Object.entries(capabilityGrants)) {
     if (Array.isArray(granted) && granted.length > 0) {
       grants[id] = [...granted];
+    }
+  }
+  const scopes = {};
+  for (const [id, scope] of Object.entries(capabilityScopes)) {
+    // A scope only means something next to a grant.
+    if (grants[id] && capabilityScopeSchema.safeParse(scope).success) {
+      scopes[id] = scope;
     }
   }
   const disabled = {};
@@ -182,6 +218,9 @@ export const writeExtensionStore = async (
   if (Object.keys(grants).length > 0) {
     payload.capabilityGrants = grants;
   }
+  if (Object.keys(scopes).length > 0) {
+    payload.capabilityScopes = scopes;
+  }
   if (Object.keys(disabled).length > 0) {
     payload.disabledGuests = disabled;
   }
@@ -189,13 +228,34 @@ export const writeExtensionStore = async (
     payload.serviceSocketOverrides = socketOverrides;
   }
   for (const listener of writeListeners) listener(persistPath);
-  await withStoreWriteLock(persistPath, async () => {
-    await fs.mkdir(path.dirname(persistPath), { recursive: true });
-    const tmp = `${persistPath}.tmp-${process.pid}-${Date.now()}-${(writeSequence += 1)}`;
-    await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-    await fs.rename(tmp, persistPath);
-  });
+  await fs.mkdir(path.dirname(persistPath), { recursive: true });
+  const tmp = `${persistPath}.tmp-${process.pid}-${Date.now()}-${(writeSequence += 1)}`;
+  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  await fs.rename(tmp, persistPath);
 };
+
+/** Replace the whole store. Prefer `updateExtensionStore` for a change based on the current contents. */
+export const writeExtensionStore = (persistPath, store) => (
+  withStoreWriteLock(persistPath, () => writeExtensionStoreUnlocked(persistPath, store))
+);
+
+/**
+ * Read, change, and write the store as one step under the write lock, so two
+ * changes made at the same time (Allow in one window, Pause in another) both
+ * land instead of the second one writing over a stale copy of the first.
+ * `mutate` returns the next store, or `null` to leave the file alone.
+ * @param {string} persistPath
+ * @param {(current: Awaited<ReturnType<typeof readExtensionStore>>) => Promise<object | null> | object | null} mutate
+ */
+export const updateExtensionStore = (persistPath, mutate) => (
+  withStoreWriteLock(persistPath, async () => {
+    const current = await readExtensionStore(persistPath);
+    const next = await mutate(current);
+    if (next) {
+      await writeExtensionStoreUnlocked(persistPath, next);
+    }
+  })
+);
 
 let writeSequence = 0;
 /** @type {Set<(persistPath: string) => void>} */
@@ -228,8 +288,7 @@ export const readExtensionPaths = async (persistPath) => {
   return store.paths;
 };
 
-export const writeExtensionPaths = async (paths, persistPath) => {
-  const current = await readExtensionStore(persistPath);
+export const writeExtensionPaths = (paths, persistPath) => updateExtensionStore(persistPath, (current) => {
   const sources = {};
   const gitOrigins = {};
   for (const entry of paths) {
@@ -240,15 +299,8 @@ export const writeExtensionPaths = async (paths, persistPath) => {
       gitOrigins[entry] = current.gitOrigins[entry];
     }
   }
-  await writeExtensionStore(persistPath, {
-    paths,
-    sources,
-    gitOrigins,
-    capabilityGrants: current.capabilityGrants,
-    disabledGuests: current.disabledGuests,
-    serviceSocketOverrides: current.serviceSocketOverrides,
-  });
-};
+  return { ...current, paths, sources, gitOrigins };
+});
 
 /**
  * Record the user's approval for one guest. `granted` replaces the previous
@@ -258,13 +310,19 @@ export const writeExtensionPaths = async (paths, persistPath) => {
  * @param {string} persistPath
  * @param {string[]} granted
  */
-export const setCapabilityGrants = async (guestId, persistPath, granted) => {
-  const current = await readExtensionStore(persistPath);
+export const setCapabilityGrants = (guestId, persistPath, granted, scope = null) => updateExtensionStore(persistPath, (current) => {
   const capabilityGrants = { ...current.capabilityGrants };
+  const capabilityScopes = { ...current.capabilityScopes };
   if (granted.length > 0) {
     capabilityGrants[guestId] = [...granted];
+    if (scope) {
+      capabilityScopes[guestId] = scope;
+    } else {
+      delete capabilityScopes[guestId];
+    }
   } else {
     delete capabilityGrants[guestId];
+    delete capabilityScopes[guestId];
   }
-  await writeExtensionStore(persistPath, { ...current, capabilityGrants });
-};
+  return { ...current, capabilityGrants, capabilityScopes };
+});

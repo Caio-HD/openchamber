@@ -29,7 +29,8 @@ import { installGuest, installGuestFromZipBuffer, parseInstallRequest, uninstall
 import { guestUploadMaxBytes, readGuestUploadBody } from './upload.js';
 import { checkAllGuestUpdates, updateGuest, withGuestUpdate } from './updates.js';
 import { extensionsPersistPath, readExtensionStore, setCapabilityGrants } from './persist.js';
-import { forgetGuestAuth, getGuestAuth, guestAuthPersistPath, patchGuestAuth } from './auth-store.js';
+import { guestGrantScope } from './grant-scope.js';
+import { dropGuestTokens, forgetGuestAuth, getGuestAuth, guestAuthPersistPath, patchGuestAuth } from './auth-store.js';
 import {
   disconnectHostGuest,
   startHostGuestAuthorization,
@@ -498,7 +499,7 @@ export const registerGuestRoutes = (app, {
           'DISABLED',
         );
       }
-      if (!(store.capabilityGrants?.[guest.id] ?? []).includes('network')) {
+      if (!guest.capabilityGrants.includes('network')) {
         throw new GuestOAuthError(
           `${guest.name} has not been allowed to use external services. Review it in Settings → Extensions.`,
           'NOT_GRANTED',
@@ -542,6 +543,7 @@ export const registerGuestRoutes = (app, {
         guestName: guest.name,
         packageRoot: guest.packageRoot,
         service: guest.service,
+        granted: guest.capabilityGrants,
         persistPath,
         method: parsed.data.method,
         path: parsed.data.path,
@@ -582,7 +584,7 @@ export const registerGuestRoutes = (app, {
         content: parsed.data.content,
         projectDirectory: directory,
         patterns: guest.filesystem ?? [],
-        grants: store.capabilityGrants?.[guest.id] ?? [],
+        grants: guest.capabilityGrants,
         homeDir: os.homedir(),
       });
       if (!result.ok) {
@@ -611,7 +613,7 @@ export const registerGuestRoutes = (app, {
       if (store.disabledGuests?.[guest.id]) {
         return res.status(400).json({ error: 'DISABLED', message: `${guest.name} is disabled in Settings → Extensions.` });
       }
-      if (!(store.capabilityGrants?.[guest.id] ?? []).includes('model')) {
+      if (!guest.capabilityGrants.includes('model')) {
         return res.status(400).json({
           error: 'NOT_GRANTED',
           message: `${guest.name} has not been allowed to use the Small Model. Review it in Settings → Extensions.`,
@@ -682,9 +684,17 @@ export const registerGuestRoutes = (app, {
       if (granted.length > 0 && !matchesRequest) {
         return res.status(400).json({ error: 'invalid-request' });
       }
-      await setCapabilityGrants(guest.id, persistPath, granted);
+      const scope = guestGrantScope(guest);
+      const store = await readExtensionStore(persistPath);
+      const previousOrigin = store.capabilityScopes?.[guest.id]?.apiOrigin;
+      await setCapabilityGrants(guest.id, persistPath, granted, granted.length > 0 ? scope : null);
       if (granted.length === 0) {
         await stopGuestService(guest.id);
+      }
+      // A token was pasted for one API origin. When a newer version points
+      // the integration somewhere else, that token must not follow it.
+      if (previousOrigin && scope.apiOrigin && previousOrigin !== scope.apiOrigin) {
+        await dropGuestTokens(guest.id, authPath);
       }
       const next = await loadGuest(guest.id);
       if (!next) {

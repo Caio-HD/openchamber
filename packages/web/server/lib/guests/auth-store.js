@@ -60,24 +60,43 @@ export const readGuestAuthStore = async (persistPath) => {
   }
 };
 
-export const writeGuestAuthStore = async (store, persistPath) => {
+/** @type {Map<string, Promise<unknown>>} */
+const writeChains = new Map();
+let writeSequence = 0;
+
+// Two writers at once (a token refresh while a settings field saves) used to
+// share one temp file and a stale read: one of them lost. Every change to one
+// store file now runs read → change → write as a single step, one after
+// another, each on its own temp file.
+const withAuthStoreLock = (persistPath, run) => {
+  const previous = writeChains.get(persistPath) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(run);
+  const chained = next.finally(() => {
+    if (writeChains.get(persistPath) === chained) writeChains.delete(persistPath);
+  });
+  writeChains.set(persistPath, chained);
+  return next;
+};
+
+const writeGuestAuthStoreUnlocked = async (store, persistPath) => {
   const parsed = storeSchema.safeParse(store);
   if (!parsed.success) {
     throw new Error('Invalid guest auth store');
   }
   await fs.mkdir(path.dirname(persistPath), { recursive: true });
-  const tmp = `${persistPath}.tmp-${process.pid}`;
+  const tmp = `${persistPath}.tmp-${process.pid}-${Date.now()}-${(writeSequence += 1)}`;
   await fs.writeFile(tmp, `${JSON.stringify(parsed.data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await fs.rename(tmp, persistPath);
   await fs.chmod(persistPath, 0o600);
 };
+
 
 export const getGuestAuth = async (guestId, persistPath) => {
   const store = await readGuestAuthStore(persistPath);
   return store.guests[guestId] ?? null;
 };
 
-export const patchGuestAuth = async (guestId, patch, persistPath) => {
+export const patchGuestAuth = (guestId, patch, persistPath) => withAuthStoreLock(persistPath, async () => {
   const store = await readGuestAuthStore(persistPath);
   const next = { ...(store.guests[guestId] ?? {}) };
   for (const [key, value] of Object.entries(patch)) {
@@ -98,9 +117,9 @@ export const patchGuestAuth = async (guestId, patch, persistPath) => {
   } else {
     guests[guestId] = next;
   }
-  await writeGuestAuthStore({ guests }, persistPath);
+  await writeGuestAuthStoreUnlocked({ guests }, persistPath);
   return guests[guestId] ?? null;
-};
+});
 
 export const dropGuestTokens = async (guestId, persistPath) => {
   const current = await getGuestAuth(guestId, persistPath);
@@ -118,12 +137,12 @@ export const dropGuestTokens = async (guestId, persistPath) => {
 };
 
 /** Drop everything stored for a guest: tokens, client credentials, and settings. Used when the package is removed. */
-export const forgetGuestAuth = async (guestId, persistPath) => {
+export const forgetGuestAuth = (guestId, persistPath) => withAuthStoreLock(persistPath, async () => {
   const store = await readGuestAuthStore(persistPath);
   if (!(guestId in store.guests)) {
     return;
   }
   const guests = { ...store.guests };
   delete guests[guestId];
-  await writeGuestAuthStore({ ...store, guests }, persistPath);
-};
+  await writeGuestAuthStoreUnlocked({ ...store, guests }, persistPath);
+});

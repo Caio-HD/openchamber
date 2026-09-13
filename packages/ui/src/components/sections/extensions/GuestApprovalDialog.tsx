@@ -45,6 +45,7 @@ export const GuestApprovalDialog: React.FC<GuestApprovalDialogProps> = ({ guest,
   const filesystemPatterns = guest?.filesystem ?? [];
   const serviceExec = guest?.service?.permissions?.exec ?? [];
   const serviceSockets = guest?.service?.permissions?.sockets ?? [];
+  const apiOrigin = guest?.integration?.apiOrigin ?? null;
 
   return (
     <Dialog
@@ -80,6 +81,12 @@ export const GuestApprovalDialog: React.FC<GuestApprovalDialogProps> = ({ guest,
                         <li key={pattern} className="typography-meta break-all font-mono text-foreground">{pattern}</li>
                       ))}
                     </ul>
+                  ) : null}
+                  {capability === 'network' && apiOrigin ? (
+                    <p className="typography-meta mt-1 text-foreground">
+                      {t('settings.extensions.capability.service.sockets')}{' '}
+                      <span className="break-all font-mono">{apiOrigin}</span>
+                    </p>
                   ) : null}
                   {capability === 'service' && serviceExec.length > 0 ? (
                     <p className="typography-meta mt-1 text-foreground">

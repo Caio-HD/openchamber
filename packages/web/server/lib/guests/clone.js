@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import dns from 'node:dns/promises';
 import net from 'node:net';
 
 const CLONE_TIMEOUT_MS = 60_000;
@@ -28,7 +29,30 @@ export const isPublicHostname = (hostname) => {
   return host.includes('.');
 };
 
-export const isHttpsGitUrl = (value) => {
+/**
+ * A public-looking hostname can still resolve to a private address (a DNS
+ * record the link's author controls). Every address it resolves to must be
+ * public; a name that does not resolve is refused too.
+ * @param {string} hostname
+ * @param {(hostname: string, options: { all: true }) => Promise<Array<{ address: string }>>} [lookup]
+ */
+export const resolvesToPublicAddress = async (hostname, lookup = (name, options) => dns.lookup(name, options)) => {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  if (!isPublicHostname(host)) {
+    return false;
+  }
+  if (net.isIP(host)) {
+    return true;
+  }
+  try {
+    const addresses = await lookup(host, { all: true });
+    return addresses.length > 0 && addresses.every((entry) => isPublicHostname(entry.address));
+  } catch {
+    return false;
+  }
+};
+
+const isHttpsGitUrl = (value) => {
   try {
     const parsed = new URL(value);
     return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && isPublicHostname(parsed.hostname);
@@ -142,11 +166,29 @@ export const runGit = (args, { gitBinary = 'git', cwd, timeoutMs = CLONE_TIMEOUT
  * `git` is often not on PATH. `ref` pins a branch or tag (`--branch`); a shallow clone of a tag
  * works the same way as of a branch.
  */
-export const cloneGitRepository = async (source, dest, { gitBinary = 'git', timeoutMs = CLONE_TIMEOUT_MS, ref } = {}) => {
+/** @returns {string | null} the hostname when `value` is an https URL */
+const httpsHostname = (value) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' ? parsed.hostname : null;
+  } catch {
+    return null;
+  }
+};
+
+export const cloneGitRepository = async (source, dest, { gitBinary = 'git', timeoutMs = CLONE_TIMEOUT_MS, ref, lookup } = {}) => {
   if (ref !== undefined && !isGitRef(ref)) {
     return { ok: false, code: 'clone-failed' };
   }
-  const args = ['clone', '--depth', '1'];
+  // Install and update only ever pass a public https URL here (the route
+  // checks the shape); tests clone local paths, which have no host to check.
+  const hostname = httpsHostname(source);
+  if (hostname !== null && !await resolvesToPublicAddress(hostname, lookup)) {
+    return { ok: false, code: 'clone-failed' };
+  }
+  // git follows HTTP redirects on its own; a public host must not be able to
+  // bounce the clone onto a private one.
+  const args = ['-c', 'http.followRedirects=false', 'clone', '--depth', '1'];
   if (ref) {
     args.push('--branch', ref);
   }

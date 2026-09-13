@@ -9,13 +9,13 @@ import {
   toPublicGuest,
 } from './catalog.js';
 import { stopGuestService } from './service.js';
-import { cloneGitRepository, isHttpsGitUrl, isHttpsZipUrl, parseGitInstallUrl } from './clone.js';
+import { cloneGitRepository, isHttpsZipUrl, isPublicHostname, parseGitInstallUrl, resolvesToPublicAddress } from './clone.js';
 import { extractZipBuffer, unwrapGuestRoot } from './extract-zip.js';
 import {
   guestCopiesDir,
   isCopiedGuestRoot,
   readExtensionStore,
-  writeExtensionStore,
+  updateExtensionStore,
 } from './persist.js';
 
 const MAX_ZIP_BYTES = 20 * 1024 * 1024;
@@ -61,15 +61,12 @@ const persistGuest = async (guest, root, source, persistPath, { replace = false,
       return removed;
     }
   }
-  const after = await readExtensionStore(persistPath);
-  await writeExtensionStore(persistPath, {
-    paths: [...after.paths, root],
+  await updateExtensionStore(persistPath, (after) => ({
+    ...after,
+    paths: after.paths.includes(root) ? after.paths : [...after.paths, root],
     sources: { ...after.sources, [root]: source },
     gitOrigins: origin ? { ...after.gitOrigins, [root]: origin } : after.gitOrigins,
-    capabilityGrants: after.capabilityGrants,
-    disabledGuests: after.disabledGuests,
-    serviceSocketOverrides: after.serviceSocketOverrides,
-  });
+  }));
   return {
     ok: true,
     replaced: Boolean(clash),
@@ -131,6 +128,17 @@ const installCopiedGuest = async ({ source, prepare, persistPath, openchamberVer
   }
 };
 
+// A redirect hop may land on a signed download URL without a .zip suffix; it
+// still has to be https on a public host.
+const isHttpsRedirectUrl = (value) => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.username === '' && parsed.password === '' && isPublicHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+};
+
 const readLocalZip = async (filePath) => {
   try {
     const stat = await fs.stat(filePath);
@@ -143,13 +151,38 @@ const readLocalZip = async (filePath) => {
   }
 };
 
-const downloadZip = async (url) => {
-  const response = await fetch(url, { redirect: 'follow' });
-  if (!response.ok) {
-    return null;
+const MAX_ZIP_REDIRECTS = 5;
+
+/**
+ * Fetch the archive by hand, one hop at a time. A public URL can redirect to
+ * a private one, so every hop is checked (https, public host, public DNS
+ * answer) before the request is made, not after the bytes arrived.
+ * @param {string} url
+ * @param {{ fetchImpl?: typeof fetch, lookup?: Parameters<typeof resolvesToPublicAddress>[1] }} [options]
+ */
+export const downloadZip = async (url, { fetchImpl = fetch, lookup } = {}) => {
+  let current = url;
+  let response = null;
+  for (let hop = 0; hop <= MAX_ZIP_REDIRECTS; hop += 1) {
+    if (!isHttpsZipUrl(current) && !isHttpsRedirectUrl(current)) {
+      return null;
+    }
+    if (!await resolvesToPublicAddress(new URL(current).hostname, lookup)) {
+      return null;
+    }
+    const hopResponse = await fetchImpl(current, { redirect: 'manual' });
+    if (hopResponse.status >= 300 && hopResponse.status < 400) {
+      const location = hopResponse.headers.get('location');
+      if (!location) {
+        return null;
+      }
+      current = new URL(location, current).href;
+      continue;
+    }
+    response = hopResponse;
+    break;
   }
-  // A public URL can redirect to a private one; the final hop is checked too.
-  if (response.url && !isHttpsZipUrl(response.url) && !isHttpsGitUrl(response.url)) {
+  if (!response || !response.ok) {
     return null;
   }
   const length = Number(response.headers.get('content-length'));
@@ -267,38 +300,34 @@ export const uninstallGuest = async (id, persistPath) => {
     return { ok: false, code: 'bundled' };
   }
 
-  const stored = await readExtensionStore(persistPath);
-  const kept = [];
-  const sources = {};
-  const gitOrigins = {};
   let removedRoot = null;
-  for (const entry of stored.paths) {
-    const root = await resolveGuestPackageRoot(entry);
-    if (root === guest.packageRoot) {
-      removedRoot = root;
-      continue;
+  await updateExtensionStore(persistPath, async (stored) => {
+    const kept = [];
+    const sources = {};
+    const gitOrigins = {};
+    for (const entry of stored.paths) {
+      const root = await resolveGuestPackageRoot(entry);
+      if (root === guest.packageRoot) {
+        removedRoot = root;
+        continue;
+      }
+      kept.push(entry);
+      if (stored.sources[entry]) {
+        sources[entry] = stored.sources[entry];
+      }
+      if (stored.gitOrigins[entry]) {
+        gitOrigins[entry] = stored.gitOrigins[entry];
+      }
     }
-    kept.push(entry);
-    if (stored.sources[entry]) {
-      sources[entry] = stored.sources[entry];
-    }
-    if (stored.gitOrigins[entry]) {
-      gitOrigins[entry] = stored.gitOrigins[entry];
-    }
-  }
-  const capabilityGrants = { ...(stored.capabilityGrants ?? {}) };
-  delete capabilityGrants[id];
-  const disabledGuests = { ...(stored.disabledGuests ?? {}) };
-  delete disabledGuests[id];
-  const serviceSocketOverrides = { ...(stored.serviceSocketOverrides ?? {}) };
-  delete serviceSocketOverrides[id];
-  await writeExtensionStore(persistPath, {
-    paths: kept,
-    sources,
-    gitOrigins,
-    capabilityGrants,
-    disabledGuests,
-    serviceSocketOverrides,
+    const capabilityGrants = { ...(stored.capabilityGrants ?? {}) };
+    delete capabilityGrants[id];
+    const capabilityScopes = { ...(stored.capabilityScopes ?? {}) };
+    delete capabilityScopes[id];
+    const disabledGuests = { ...(stored.disabledGuests ?? {}) };
+    delete disabledGuests[id];
+    const serviceSocketOverrides = { ...(stored.serviceSocketOverrides ?? {}) };
+    delete serviceSocketOverrides[id];
+    return { paths: kept, sources, gitOrigins, capabilityGrants, capabilityScopes, disabledGuests, serviceSocketOverrides };
   });
   await stopGuestService(id);
   if (removedRoot && isCopiedGuestRoot(removedRoot, persistPath)) {

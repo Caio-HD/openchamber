@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { listInstalledGuests } from './catalog.js';
 import { buildStoreZip } from './extract-zip.test.js';
 import {
+  downloadZip,
   installGuestFromGitSource,
   installGuestFromPath,
   installGuestFromUrl,
@@ -266,5 +267,60 @@ describe('installGuestFromGitSource', () => {
     expect(await fs.stat(path.join(repo, 'package.json')).then((stat) => stat.isFile())).toBe(true);
 
     await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('downloadZip', () => {
+  const publicLookup = async () => [{ address: '93.184.216.34' }];
+  const headers = (entries) => new Headers(entries);
+
+  test('follows a public redirect by hand and returns the bytes', async () => {
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      seen.push({ url: String(url), redirect: init.redirect });
+      if (String(url) === 'https://example.com/panel.zip') {
+        return new Response(null, { status: 302, headers: headers({ location: 'https://cdn.example.com/signed/abc' }) });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: headers({ 'content-length': '3' }) });
+    };
+    const bytes = await downloadZip('https://example.com/panel.zip', { fetchImpl, lookup: publicLookup });
+    expect(bytes && [...bytes]).toEqual([1, 2, 3]);
+    expect(seen).toEqual([
+      { url: 'https://example.com/panel.zip', redirect: 'manual' },
+      { url: 'https://cdn.example.com/signed/abc', redirect: 'manual' },
+    ]);
+  });
+
+  test('refuses a redirect to a private or non-https address before requesting it', async () => {
+    for (const location of ['http://127.0.0.1:8080/panel.zip', 'https://localhost/panel.zip', 'https://10.0.0.5/x.zip', 'http://example.com/panel.zip']) {
+      const requested = [];
+      const fetchImpl = async (url) => {
+        requested.push(String(url));
+        return new Response(null, { status: 302, headers: headers({ location }) });
+      };
+      expect(await downloadZip('https://example.com/panel.zip', { fetchImpl, lookup: publicLookup })).toBeNull();
+      expect(requested).toEqual(['https://example.com/panel.zip']);
+    }
+  });
+
+  test('refuses a public name that resolves to a private address', async () => {
+    let requested = 0;
+    const fetchImpl = async () => {
+      requested += 1;
+      return new Response(new Uint8Array([1]), { status: 200 });
+    };
+    const lookup = async () => [{ address: '93.184.216.34' }, { address: '10.1.1.1' }];
+    expect(await downloadZip('https://example.com/panel.zip', { fetchImpl, lookup })).toBeNull();
+    expect(requested).toBe(0);
+  });
+
+  test('gives up after too many redirects', async () => {
+    let hops = 0;
+    const fetchImpl = async (url) => {
+      hops += 1;
+      return new Response(null, { status: 302, headers: headers({ location: `${String(url)}0` }) });
+    };
+    expect(await downloadZip('https://example.com/panel.zip', { fetchImpl, lookup: publicLookup })).toBeNull();
+    expect(hops).toBeLessThanOrEqual(6);
   });
 });

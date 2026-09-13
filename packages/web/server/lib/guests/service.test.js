@@ -59,6 +59,7 @@ describe('guest service proxy', () => {
           entry: 'service/main.js',
           permissions: { exec: ['docker'] },
         },
+        granted: [],
         persistPath,
         method: 'GET',
         path: '/ping',
@@ -86,6 +87,7 @@ describe('guest service proxy', () => {
           entry: 'service/main.js',
           permissions: { exec: ['docker'] },
         },
+        granted: ['service'],
         persistPath,
         method: 'GET',
         path: '/ping',
@@ -110,6 +112,7 @@ describe('guest service proxy', () => {
           entry: 'service/main.js',
           permissions: { exec: ['docker'] },
         },
+        granted: ['service'],
         persistPath,
         method: 'GET',
         path: '/ping',
@@ -136,6 +139,7 @@ describe('guest service proxy', () => {
           guestId: 'docker',
           packageRoot,
           service,
+          granted: ['service'],
           persistPath,
           method: 'GET',
           path: '/ping',
@@ -144,6 +148,7 @@ describe('guest service proxy', () => {
           guestId: 'docker',
           packageRoot,
           service,
+          granted: ['service'],
           persistPath,
           method: 'GET',
           path: '/ping',
@@ -152,6 +157,7 @@ describe('guest service proxy', () => {
           guestId: 'docker',
           packageRoot,
           service,
+          granted: ['service'],
           persistPath,
           method: 'GET',
           path: '/ping',
@@ -176,10 +182,41 @@ describe('guest service proxy', () => {
         guestId: 'docker',
         packageRoot,
         service: { entry: 'service/main.js' },
+        granted: ['service'],
         persistPath,
         method: 'GET',
         path: 'http://evil.example/ping',
       })).rejects.toMatchObject({ code: 'BAD_PATH' });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('pause during startup', () => {
+  test('a stop that lands while the service is coming up wins', async () => {
+    const { dir, persistPath, packageRoot } = await writeFixture();
+    try {
+      await setCapabilityGrants('docker', persistPath, ['service']);
+      const pending = proxyGuestServiceRequest({
+        guestId: 'docker',
+        packageRoot,
+        service: { entry: 'service/main.js', permissions: { exec: ['docker'] } },
+        granted: ['service'],
+        persistPath,
+        method: 'GET',
+        path: '/ping',
+      });
+      // Stop while the process is coming up: the start must notice and not
+      // hand a ready service to the request that began it.
+      const startedAt = Date.now();
+      while (getServiceStatus('docker') !== 'starting' && Date.now() - startedAt < 5_000) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(getServiceStatus('docker')).toBe('starting');
+      await stopGuestService('docker');
+      await expect(pending).rejects.toMatchObject({ code: 'NO_SERVICE' });
+      expect(getServiceStatus('docker')).toBe('stopped');
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

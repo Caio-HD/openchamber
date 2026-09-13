@@ -5,6 +5,7 @@ import { hasGuestPage, requestedGuestCapabilities, resolveAttachEntry, resolveAt
 import { parseManifestJson } from '@openchamber/sdk/schemas';
 
 import { listRelativeGuestScriptHrefs, resolveGuestHtmlRelativePath } from './html-tokens.js';
+import { effectiveGrants, guestGrantScope } from './grant-scope.js';
 import { onExtensionStoreWrite, readExtensionStore } from './persist.js';
 import { buildPublicSocketBindings } from './sockets.js';
 
@@ -371,7 +372,14 @@ const listInstalledGuestsUncached = async ({ persistPath } = {}) => {
     guests.push({
       ...withSource(guest, source, root),
       gitOrigin,
-      capabilityGrants: stored.capabilityGrants?.[guest.id] ?? [],
+      // Grants are narrowed to what the user actually approved for this
+      // version: a widened filesystem list, a new API origin, or new service
+      // permissions drop that capability until the dialog runs again.
+      capabilityGrants: effectiveGrants(
+        stored.capabilityGrants?.[guest.id] ?? [],
+        stored.capabilityScopes?.[guest.id],
+        guestGrantScope(guest),
+      ),
       enabled: !stored.disabledGuests?.[guest.id],
       socketBindings,
     });

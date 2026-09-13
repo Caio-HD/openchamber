@@ -187,6 +187,8 @@ export type PublicIntegration = {
   auth: IntegrationAuth;
   /** Present for `auth: 'token'`. Tells the Integrations card which fields to draw. */
   token?: PublicIntegrationToken;
+  /** The one origin `request` may call. Shown in the approval dialog; not a secret. */
+  apiOrigin?: string;
   settings?: IntegrationSettingField[];
 };
 
@@ -469,6 +471,10 @@ export const toPublicIntegration = (integration: IntegrationContribution): Publi
     description: integration.description,
     auth,
   };
+  const api = resolveIntegrationApi(integration);
+  if (api?.apiOrigin) {
+    next.apiOrigin = api.apiOrigin;
+  }
   if (auth === 'token' && integration.token) {
     next.token = { scheme: integration.token.scheme ?? 'raw' };
     if (integration.token.usernameLabel) {

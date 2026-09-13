@@ -15,20 +15,25 @@ const alignCatalogRuntime = (runtimeKey: string): void => {
   }
 };
 
-let inFlight: Promise<void> | null = null;
+let inFlight: { runtimeKey: string; request: Promise<void> } | null = null;
 
-/** One request at a time: the rail, the composer, and the dialogs all ask on mount. */
+/**
+ * One request at a time per runtime: the rail, the composer, and the dialogs
+ * all ask on mount. A request still running for the previous server is not
+ * reused after a switch; its answer is dropped by the runtime check below,
+ * and the new server gets its own request.
+ */
 export const loadGuestCatalog = (): Promise<void> => {
-  if (inFlight) return inFlight;
-  const request = loadGuestCatalogOnce().finally(() => {
-    if (inFlight === request) inFlight = null;
+  const runtimeKey = getRuntimeKey();
+  if (inFlight && inFlight.runtimeKey === runtimeKey) return inFlight.request;
+  const request = loadGuestCatalogOnce(runtimeKey).finally(() => {
+    if (inFlight?.request === request) inFlight = null;
   });
-  inFlight = request;
+  inFlight = { runtimeKey, request };
   return request;
 };
 
-const loadGuestCatalogOnce = async (): Promise<void> => {
-  const runtimeKey = getRuntimeKey();
+const loadGuestCatalogOnce = async (runtimeKey: string): Promise<void> => {
   alignCatalogRuntime(runtimeKey);
 
   const store = useGuestsStore.getState();

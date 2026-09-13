@@ -91,3 +91,22 @@ describe('guest auth store', () => {
     await fs.promises.rm(dir, { recursive: true, force: true });
   });
 });
+
+describe('concurrent auth changes', () => {
+  test('two patches at once both land', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'oc-guest-auth-'));
+    const file = guestAuthPersistPath(dir);
+    try {
+      await Promise.all([
+        patchGuestAuth('alpha', { accessToken: 'tok-a' }, file),
+        patchGuestAuth('beta', { accessToken: 'tok-b' }, file),
+        patchGuestAuth('alpha', { settings: { 'list-id': '7' } }, file),
+      ]);
+      expect(await getGuestAuth('alpha', file)).toMatchObject({ accessToken: 'tok-a', settings: { 'list-id': '7' } });
+      expect(await getGuestAuth('beta', file)).toMatchObject({ accessToken: 'tok-b' });
+      expect(fs.readdirSync(dir).filter((name) => name.includes('.tmp-'))).toEqual([]);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

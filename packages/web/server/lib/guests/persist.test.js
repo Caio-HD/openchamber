@@ -8,6 +8,7 @@ import {
   guestCopiesDir,
   isCopiedGuestRoot,
   readExtensionPaths,
+  setCapabilityGrants,
   readExtensionStore,
   writeExtensionPaths,
   writeExtensionStore,
@@ -52,6 +53,7 @@ describe('extension persist', () => {
       sources: {},
       gitOrigins: {},
       capabilityGrants: {},
+      capabilityScopes: {},
       disabledGuests: {},
       serviceSocketOverrides: {},
     });
@@ -64,6 +66,7 @@ describe('extension persist', () => {
       sources: { '/two': 'zip' },
       gitOrigins: {},
       capabilityGrants: {},
+      capabilityScopes: {},
       disabledGuests: {},
       serviceSocketOverrides: {},
     });
@@ -73,6 +76,7 @@ describe('extension persist', () => {
       sources: { '/two': 'zip' },
       gitOrigins: {},
       capabilityGrants: {},
+      capabilityScopes: {},
       disabledGuests: {},
       serviceSocketOverrides: {},
     });
@@ -96,6 +100,7 @@ describe('extension persist', () => {
       sources: {},
       gitOrigins: {},
       capabilityGrants: { docker: ['service'] },
+      capabilityScopes: {},
       disabledGuests: {},
       serviceSocketOverrides: {},
     });
@@ -117,6 +122,7 @@ describe('extension persist', () => {
       sources: {},
       gitOrigins: {},
       capabilityGrants: { docker: ['service'] },
+      capabilityScopes: {},
       disabledGuests: {},
       serviceSocketOverrides: { docker: { docker: '/custom/docker.sock' } },
     });
@@ -126,6 +132,7 @@ describe('extension persist', () => {
       sources: {},
       gitOrigins: {},
       capabilityGrants: { docker: ['service'] },
+      capabilityScopes: {},
       disabledGuests: {},
       serviceSocketOverrides: { docker: { docker: '/custom/docker.sock' } },
     });
@@ -145,6 +152,7 @@ describe('extension persist', () => {
       sources: {},
       gitOrigins: {},
       capabilityGrants: {},
+      capabilityScopes: {},
       disabledGuests: { docker: true },
       serviceSocketOverrides: {},
     });
@@ -225,5 +233,56 @@ describe('extension persist', () => {
     expect(tolerant.gitOrigins).toEqual({ '/a': { url: 'https://github.com/acme/a.git' } });
 
     await fs.rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('concurrent store changes', () => {
+  test('two approvals at once both land', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-persist-'));
+    const file = extensionsPersistPath(dir);
+    try {
+      await writeExtensionStore(file, { paths: ['/a', '/b'] });
+      await Promise.all([
+        setCapabilityGrants('alpha', file, ['prompt'], null),
+        setCapabilityGrants('beta', file, ['filesystem'], { filesystem: ['~/notes/**'] }),
+      ]);
+      const store = await readExtensionStore(file);
+      expect(store.capabilityGrants).toEqual({ alpha: ['prompt'], beta: ['filesystem'] });
+      expect(store.capabilityScopes).toEqual({ beta: { filesystem: ['~/notes/**'] } });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('withdrawing approval also drops the recorded scope', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-persist-'));
+    const file = extensionsPersistPath(dir);
+    try {
+      await writeExtensionStore(file, { paths: ['/a'] });
+      await setCapabilityGrants('alpha', file, ['network'], { apiOrigin: 'https://api.example' });
+      expect((await readExtensionStore(file)).capabilityScopes).toEqual({ alpha: { apiOrigin: 'https://api.example' } });
+      await setCapabilityGrants('alpha', file, []);
+      const store = await readExtensionStore(file);
+      expect(store.capabilityGrants).toEqual({});
+      expect(store.capabilityScopes).toEqual({});
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('drops a malformed scope entry on read instead of refusing the store', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-persist-'));
+    const file = extensionsPersistPath(dir);
+    try {
+      await fs.writeFile(file, JSON.stringify({
+        paths: ['/a'],
+        capabilityGrants: { alpha: ['filesystem'], beta: ['network'] },
+        capabilityScopes: { alpha: { filesystem: 'not-a-list' }, beta: { apiOrigin: 'https://api.example' } },
+      }));
+      const store = await readExtensionStore(file);
+      expect(store.capabilityScopes).toEqual({ beta: { apiOrigin: 'https://api.example' } });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

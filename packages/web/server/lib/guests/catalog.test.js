@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { guestAssetContentType, inspectGuestPackage, listInstalledGuests, resolveGuestAssetPath, resolveGuestServedFile, toPublicGuest } from './catalog.js';
-import { writeExtensionPaths } from './persist.js';
+import { setCapabilityGrants, writeExtensionPaths } from './persist.js';
 
 const writeBuiltGuest = async (root) => {
   await fs.mkdir(path.join(root, 'panel'), { recursive: true });
@@ -107,6 +107,7 @@ describe('listInstalledGuests', () => {
       integration: {
         name: 'ClickUp',
         description: 'Tasks',
+        apiOrigin: 'https://api.clickup.com',
         auth: 'oauth',
         settings: [{ id: 'list-id', label: 'List ID' }],
       },
@@ -305,5 +306,47 @@ describe('actions and commands on the public row', () => {
     expect(await inspectGuestPackage(root)).toMatchObject({ ok: false, code: 'invalid-manifest' });
 
     await fs.rm(root, { recursive: true, force: true });
+  });
+});
+
+describe('grant scopes', () => {
+  const writeScopedGuest = async (root, filesystem) => {
+    await fs.mkdir(path.join(root, 'panel'), { recursive: true });
+    await fs.writeFile(path.join(root, 'panel', 'index.html'), '<script src="./main.js"></script>');
+    await fs.writeFile(path.join(root, 'panel', 'main.js'), 'console.log("hello")');
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: '@openchamber/scoped',
+      version: '1.0.0',
+      openchamber: {
+        apiVersion: 1,
+        contributes: {
+          panel: { id: 'scoped', name: 'Scoped', icon: 'window', entry: 'panel/index.html' },
+          capabilities: ['prompt'],
+          filesystem,
+        },
+      },
+    }));
+  };
+
+  test('a widened filesystem list drops that grant until the user approves again', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-'));
+    const persistPath = path.join(dir, 'extensions.json');
+    const root = path.join(dir, 'scoped');
+    try {
+      await writeScopedGuest(root, ['~/notes/**']);
+      await writeExtensionPaths([root], persistPath);
+      await setCapabilityGrants('scoped', persistPath, ['prompt', 'filesystem'], { filesystem: ['~/notes/**'] });
+      const [approved] = await listInstalledGuests({ persistPath });
+      expect(approved.capabilityGrants).toEqual(['prompt', 'filesystem']);
+
+      await writeScopedGuest(root, ['~/**']);
+      // Any store write drops the 5s catalog cache, as an update or a reinstall would.
+      await writeExtensionPaths([root], persistPath);
+      const [widened] = await listInstalledGuests({ persistPath });
+      expect(widened.capabilityGrants).toEqual(['prompt']);
+      expect(toPublicGuest(widened).capabilities).toEqual({ requested: ['prompt', 'filesystem'], granted: ['prompt'] });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
