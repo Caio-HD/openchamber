@@ -117,7 +117,16 @@ as the resolved model allows — they cannot name a number before knowing which
 model they got. The resolved value comes back as `outputTokens`.
 
 `timeoutMs` overrides the 60s default; `signal` aborts a request that is no
-longer wanted.
+longer wanted. The timeout covers generation, retry waits and structured-output
+retries together.
+
+OpenCode 2 can reject an explicit model before its cold catalog finishes loading.
+An `InvalidRequestError` whose message exactly names the selected model as
+`Model unavailable: provider/model` gets one retry after 500 ms, with the same
+model and prompt. Cancellation also stops the wait. Other errors are not retried.
+If the model remains unavailable, the route returns 503 with
+`code: 'small-model-unavailable'` and the model-specific reason. Commit and PR
+generation own their error toast and suppress the shared request toast.
 
 ## Structured output
 

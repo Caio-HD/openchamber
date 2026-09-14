@@ -339,7 +339,7 @@ export async function generateCommitMessage(
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),
       }),
-    }, { silentStatuses: [404] });
+    }, { notifyOnError: false });
 
     if (response.status === 404) {
       // No authenticated provider has a small model — fall back to the
@@ -534,7 +534,7 @@ export async function generatePullRequestDescription(
         ...(currentProviderId ? { preferredProviderID: currentProviderId } : {}),
         ...(currentModelId ? { preferredModelID: currentModelId } : {}),
       }),
-    }, { silentStatuses: [404] });
+    }, { notifyOnError: false });
 
     if (response.status === 404) {
       // No authenticated provider has a small model — fall back to the

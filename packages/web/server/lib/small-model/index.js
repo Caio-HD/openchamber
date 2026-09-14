@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import os from 'os';
 import path from 'path';
 import { readMergedSettingsSync } from '../opencode/settings-files.js';
@@ -299,15 +300,37 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
   if (responseSchema) sections.push(buildSchemaInstruction(responseSchema));
   const fullPrompt = sections.join('\n\n');
 
+  const generationOptions = requestOptions({ timeoutMs, signal });
+  const unavailableMessage = `Model unavailable: ${resolved.providerID}/${resolved.modelID}`;
+  let retriedUnavailable = false;
   const send = async () => {
     const result = await client.generate.text(
       { prompt: fullPrompt, model: { id: resolved.modelID, providerID: resolved.providerID } },
-      requestOptions({ timeoutMs, signal }),
+      generationOptions,
     );
     return typeof result?.text === 'string' ? result.text : '';
   };
 
-  let text = await send();
+  const sendWithCatalogRetry = async () => {
+    try {
+      return await send();
+    } catch (error) {
+      if (error?._tag !== 'InvalidRequestError' || error.message !== unavailableMessage) throw error;
+      // OpenCode 2 can resolve a cold catalog before its models arrive.
+      // This rejection precedes provider dispatch; other failures must not retry.
+      if (!retriedUnavailable) {
+        retriedUnavailable = true;
+        await delay(500, undefined, { signal: generationOptions.signal });
+        return sendWithCatalogRetry();
+      }
+      throw Object.assign(new Error(unavailableMessage), {
+        statusCode: 503,
+        code: 'small-model-unavailable',
+      });
+    }
+  };
+
+  let text = await sendWithCatalogRetry();
 
   if (responseSchema) {
     // One retry: a model that ignored the shape once often honours it on a
@@ -315,7 +338,7 @@ export async function generateSmallModelText({ prompt, system, maxOutputTokens, 
     // sentence of preamble.
     let json = extractJsonText(text);
     if (json === null) {
-      text = await send();
+      text = await sendWithCatalogRetry();
       json = extractJsonText(text);
     }
     if (json === null) {
