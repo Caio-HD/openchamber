@@ -19,11 +19,6 @@ export type SessionSubtreeOutcome = {
   failedIds: string[];
 };
 
-const parentIdOf = (session: Session): string | null => {
-  // SAFETY: OpenCode session payloads expose parentID although the SDK base Session omits it.
-  return (session as Session & { parentID?: string | null }).parentID ?? null;
-};
-
 /**
  * Every descendant an archive or delete should reach, resolved when the user
  * acts rather than while rows render.
@@ -44,7 +39,7 @@ export const collectSessionSubtreeIds = (
   const global = useGlobalSessionsStore.getState();
   const childrenByParentId = new Map<string, Session[]>();
   for (const session of [...global.activeSessions, ...global.archivedSessions]) {
-    const parentId = parentIdOf(session);
+    const parentId = session.parentID;
     if (!parentId) continue;
     const siblings = childrenByParentId.get(parentId) ?? [];
     siblings.push(session);

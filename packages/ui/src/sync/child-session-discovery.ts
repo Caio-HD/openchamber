@@ -1,10 +1,5 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
 
-const parentIdOf = (session: Session): string | null => {
-  // SAFETY: OpenCode session payloads expose parentID although the SDK base Session omits it.
-  return (session as Session & { parentID?: string | null }).parentID ?? null
-}
-
 /**
  * Pick the children a discovery listing adds to a directory store.
  *
@@ -25,7 +20,7 @@ export const selectNewChildSessions = (
   const children: Session[] = []
   for (const session of listed) {
     if (!session?.id || existingIds.has(session.id)) continue
-    const parentId = parentIdOf(session)
+    const parentId = session.parentID
     if (!parentId || !parentIds.has(parentId)) continue
     if (isKnownArchived(session.id)) continue
     children.push(session)
