@@ -1534,7 +1534,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const hasTemperatureOrTopP = agentTemperature(currentAgent) !== undefined || agentTopP(currentAgent) !== undefined;
 
         const summarizePermission = (permissionName: string): { mode: EditPermissionMode; label: string } => {
-            const rules = currentAgent.permissions;
+            const rules = currentAgent.permissions ?? [];
             const hasCustom = rules.some((rule) => rule.action === permissionName && rule.resource !== '*');
             const action = resolveWildcardPermissionEffect(rules, permissionName) ?? 'ask';
 
@@ -2567,7 +2567,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         const hasTemperatureOrTopP = agentTemperature(currentAgent) !== undefined || agentTopP(currentAgent) !== undefined;
 
         const summarizePermission = (permissionName: string): { mode: EditPermissionMode; label: string } => {
-            const rules = currentAgent.permissions;
+            const rules = currentAgent.permissions ?? [];
             const hasCustom = rules.some((rule) => rule.action === permissionName && rule.resource !== '*');
             const action = resolveWildcardPermissionEffect(rules, permissionName) ?? 'ask';
 

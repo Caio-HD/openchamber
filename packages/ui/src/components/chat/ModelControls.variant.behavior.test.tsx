@@ -363,12 +363,14 @@ describe('ModelControls effort restore', () => {
     });
   });
 
-  for (const missing of ['request', 'body']) {
+  for (const missing of ['request', 'body', 'permissions', 'v2 fields']) {
     test(`renders a cached agent without ${missing}`, async () => {
       const request = agent.request;
       const body = request.body;
-      if (missing === 'request') Reflect.deleteProperty(agent, 'request');
-      else Reflect.deleteProperty(request, 'body');
+      const permissions = agent.permissions;
+      if (missing === 'request' || missing === 'v2 fields') Reflect.deleteProperty(agent, 'request');
+      if (missing === 'body') Reflect.deleteProperty(request, 'body');
+      if (missing === 'permissions' || missing === 'v2 fields') Reflect.deleteProperty(agent, 'permissions');
       try {
         const { dom, cleanup } = await renderModelControls();
         try {
@@ -379,6 +381,7 @@ describe('ModelControls effort restore', () => {
       } finally {
         agent.request = request;
         request.body = body;
+        agent.permissions = permissions;
       }
     });
   }
