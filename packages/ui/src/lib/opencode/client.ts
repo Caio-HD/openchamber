@@ -18,7 +18,6 @@ import type {
   SessionDiffInput,
   FormAnswer,
   FormInfo,
-  JsonValue,
   LocationGetOutput,
   PermissionEffect,
   PermissionSource,
@@ -38,6 +37,8 @@ import { getRuntimeKey } from "@/lib/runtime-switch"
 import { getRegisteredRuntimeAPIs } from "@/contexts/runtimeAPIRegistry"
 import { markStartupTrace } from "@/lib/startupTrace"
 import { assertProviderCircuitClosed, recordProviderError, recordProviderSuccess } from "./provider-tracker"
+import { normalizePath } from "@/lib/pathNormalization"
+import { activeSessionSnapshotSchema } from "./session-status"
 import {
   compact,
   type Agent,
@@ -259,7 +260,9 @@ export const createRuntimeOpencodeClient = (config: RuntimeOpencodeClientConfig)
         return runtimeFetch(input, init)
       }
       const timeout = createTimeoutSignal(requestTimeoutMs)
-      const callerSignal = init?.signal
+      const callerSignal = init?.signal !== undefined
+        ? init.signal
+        : input instanceof Request ? input.signal : undefined
       const supportsAny = typeof AbortSignal !== "undefined" && typeof (AbortSignal as { any?: unknown }).any === "function"
       let signal: AbortSignal
       let detachFallback: (() => void) | null = null
@@ -291,16 +294,27 @@ export const createRuntimeOpencodeClient = (config: RuntimeOpencodeClientConfig)
       } else {
         signal = timeout.signal
       }
+      const cleanup = () => {
+        detachFallback?.()
+        timeout.cleanup()
+      }
+      let responseHasBody = false
       try {
-        return await runtimeFetch(input, { ...init, signal })
+        const response = await runtimeFetch(input, { ...init, signal })
+        responseHasBody = response.body !== null
+        return response
       } catch (error) {
         if (timeout.signal.aborted && !callerSignal?.aborted) {
           throw new Error(`OpenCode request timed out after ${requestTimeoutMs}ms`)
         }
         throw error
       } finally {
-        detachFallback?.()
-        timeout.cleanup()
+        // The SDK consumes JSON after fetch resolves. Keep cancellation and the
+        // deadline alive through body delivery, including on older WebViews
+        // using the manual signal composition. Retention is bounded by the
+        // request deadline, just like native AbortSignal.timeout.
+        if (!responseHasBody || signal.aborted) cleanup()
+        else signal.addEventListener("abort", cleanup, { once: true })
       }
     },
   })
@@ -377,6 +391,11 @@ export type FetchPermissionResult =
   | { state: "unknown" }
 
 type DirectoryAvailability = "available" | "missing" | "unknown"
+type PendingRequestListOptions = {
+  directories?: Array<string | null | undefined>
+  /** Skip the global fallback when initializing one explicit directory. */
+  includeGlobal?: boolean
+}
 const directoryProbeErrorSchema = z.object({ reason: z.string().optional(), isDirectory: z.boolean().optional() })
 
 const normalizeFsPath = (path: string): string => path.replace(/\\/g, "/")
@@ -499,21 +518,7 @@ class OpencodeService {
   }
 
   private normalizeCandidatePath(path?: string | null): string | null {
-    if (typeof path !== "string") {
-      return null
-    }
-
-    const trimmed = path.trim()
-    if (!trimmed) {
-      return null
-    }
-
-    // Normalize backslashes and uppercase the Windows drive letter so that
-    // d:\MyProject and D:\MyProject resolve to the same canonical form.
-    const normalized = trimmed.replace(/\\/g, "/").replace(/^([a-z]):/, (_, letter: string) => letter.toUpperCase() + ":")
-    const withoutTrailingSlash = normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized
-
-    return withoutTrailingSlash || null
+    return normalizePath(path)
   }
 
   private deriveHomeDirectory(path: string): { homeDirectory: string; username?: string } {
@@ -533,7 +538,7 @@ class OpencodeService {
         return { homeDirectory, username: segments[0] }
       }
 
-      return { homeDirectory: drive, username: undefined }
+      return { homeDirectory: `${drive}/`, username: undefined }
     }
 
     const absolute = path.startsWith("/")
@@ -1143,7 +1148,7 @@ class OpencodeService {
    */
   async getActiveSessionStatuses(): Promise<Record<string, SessionStatus> | null> {
     try {
-      const active = await call("session.active", () => this.client.session.active())
+      const active = activeSessionSnapshotSchema.parse(await call("session.active", () => this.client.session.active()))
       const statuses: Record<string, SessionStatus> = {}
       for (const sessionID of Object.keys(active)) statuses[sessionID] = { type: "busy" }
       return statuses
@@ -1296,8 +1301,8 @@ class OpencodeService {
    * preserve existing state instead of conflating "fetch failed" with "server
    * returned no pending permissions".
    */
-  async listPendingPermissions(options?: { directories?: Array<string | null | undefined> }): Promise<PermissionRequest[]> {
-    const directories = this.uniqueDirectories(options?.directories)
+  async listPendingPermissions(options?: PendingRequestListOptions): Promise<PermissionRequest[]> {
+    const directories = this.uniqueDirectories(options?.directories, options?.includeGlobal)
     const lists = await Promise.all(
       directories.map((directory) =>
         call("permission.request.list", () =>
@@ -1323,8 +1328,8 @@ class OpencodeService {
   }
 
   /** Throws on fetch failure; see {@link listPendingPermissions}. */
-  async listPendingForms(options?: { directories?: Array<string | null | undefined> }): Promise<FormInfo[]> {
-    const directories = this.uniqueDirectories(options?.directories)
+  async listPendingForms(options?: PendingRequestListOptions): Promise<FormInfo[]> {
+    const directories = this.uniqueDirectories(options?.directories, options?.includeGlobal)
     const lists = await Promise.all(
       directories.map((directory) =>
         call("form.request.list", () =>
@@ -1335,14 +1340,14 @@ class OpencodeService {
     return dedupeById(lists)
   }
 
-  /** Unscoped first (global pending items), then each distinct directory. */
-  private uniqueDirectories(entries: Array<string | null | undefined> | undefined): Array<string | null> {
+  /** Global pending items when requested, then each distinct directory. */
+  private uniqueDirectories(entries: Array<string | null | undefined> | undefined, includeGlobal = true): Array<string | null> {
     const unique = new Set<string>()
     for (const entry of entries ?? []) {
       const normalized = this.normalizeCandidatePath(entry)
       if (normalized) unique.add(normalized)
     }
-    return [null, ...unique]
+    return includeGlobal ? [null, ...unique] : [...unique]
   }
 
   // -------------------------------------------------------------------------
@@ -1458,8 +1463,8 @@ class OpencodeService {
     }
   }
 
-  async listCommands(directory?: string | null): Promise<Command[]> {
-    return call("command.list", () => this.clientFor(directory).command.list().then((r) => r.data))
+  async listCommands(directory?: string | null, signal?: AbortSignal): Promise<Command[]> {
+    return call("command.list", () => this.clientFor(directory).command.list(undefined, { signal }).then((r) => r.data))
   }
 
   async listSkills(directory?: string | null): Promise<Skill[]> {

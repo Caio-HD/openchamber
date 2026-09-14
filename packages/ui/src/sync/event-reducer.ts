@@ -328,6 +328,7 @@ export function applyDirectoryEvent(
       const result = Binary.search(sessions, sessionID, (s) => s.id)
       if (!result.found) return false
       const next = applySessionPatch(sessions[result.index], patch)
+      if (shouldSkipStaleSessionEvent(sessions[result.index], next)) return false
 
       // Archiving removes the session from the live list; its caches go too.
       if (next.time.archived && !sessions[result.index].time.archived) {

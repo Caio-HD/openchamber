@@ -1,152 +1,229 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test"
-import type { FormRequest, Project } from "@/lib/opencode/model"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { createStore } from "zustand/vanilla"
+import { opencodeClient } from "@/lib/opencode/client"
+import type { FormRequest, Session } from "@/lib/opencode/model"
+import { bootstrapDirectory } from "./bootstrap"
 import { INITIAL_STATE, type State } from "./types"
+import { getBackgroundNetworkState, runBackgroundNetworkTask } from "../lib/background-network"
 
-type ClientStub = {
-  getLocation: () => Promise<{ directory: string; project: { id: string; directory: string; canonical: string } }>
-  getConfig: () => Promise<Record<string, never>>
-  getActiveSessionStatuses: () => Promise<State["session_status"] | null>
-  listCommands: () => Promise<unknown[]>
-  listMcpServers: () => Promise<unknown[]>
-  getVcs: () => Promise<{ branch: string }>
-  listPendingForms: () => Promise<FormRequest[]>
-  listPendingPermissions: () => Promise<unknown[]>
-  getFilesystemHome: () => Promise<string>
-  listProjects: () => Promise<Project[]>
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((complete) => { resolve = complete })
+  return { promise, resolve }
 }
 
-const client: ClientStub = {
-  getLocation: async () => ({ directory: "/repo", project: { id: "project-a", directory: "/repo", canonical: "/repo" } }),
-  getConfig: async () => ({}),
-  getActiveSessionStatuses: async () => ({}),
-  listCommands: async () => [],
-  listMcpServers: async () => [],
-  getVcs: async () => ({ branch: "main" }),
-  listPendingForms: async () => [],
-  listPendingPermissions: async () => [],
-  getFilesystemHome: async () => "/home",
-  listProjects: async () => [],
-}
-
-;(mock as unknown as { restore?: () => void }).restore?.()
-mock.module("@/lib/opencode/client", () => ({ opencodeClient: client }))
-mock.module("../lib/chatDirectories", () => ({ warmChatsRootDirectory: async () => undefined }))
-mock.module("../lib/runtime-fetch", () => ({ runtimeFetch: async () => new Response("{}", { status: 200 }) }))
-
-const { bootstrapDirectory } = await import(`./bootstrap?bootstrap-test=${Date.now()}`)
-
-const createState = (): State => ({ ...INITIAL_STATE, message: {}, part: {} })
-
-const project: Project = {
-  id: "project-a",
-  worktree: "/repo",
-  time: { created: 1, updated: 1 },
-  sandboxes: [],
-}
-
-const form = (id: string, sessionID: string, title = "Pick"): FormRequest => ({
-  id,
-  sessionID,
-  title,
-  fields: [{ key: "a", type: "boolean" }],
-})
-
-const run = (state: { current: State }, loadSessions: () => Promise<void> | void = async () => undefined) =>
-  bootstrapDirectory({
-    directory: "/repo",
-    getState: () => state.current,
-    set: (patch: Partial<State>) => {
-      state.current = { ...state.current, ...patch }
-    },
-    global: { config: {}, projects: [project], path: { directory: "", worktree: "", home: "/home" } },
-    loadSessions,
-  })
-
-const tick = () => new Promise((resolve) => setTimeout(resolve, 20))
+const location = spyOn(opencodeClient, "getLocation")
+const config = spyOn(opencodeClient, "getConfig")
+const statuses = spyOn(opencodeClient, "getActiveSessionStatuses")
+const commands = spyOn(opencodeClient, "listCommands")
+const mcp = spyOn(opencodeClient, "listMcpServers")
+const vcs = spyOn(opencodeClient, "getVcs")
+const forms = spyOn(opencodeClient, "listPendingForms")
+const permissions = spyOn(opencodeClient, "listPendingPermissions")
+const spies = [location, config, statuses, commands, mcp, vcs, forms, permissions]
 
 beforeEach(() => {
-  client.listCommands = async () => []
-  client.listPendingForms = async () => []
-  client.getActiveSessionStatuses = async () => ({})
+  for (const spy of spies) spy.mockReset()
+  location.mockImplementation(async (directory) => ({
+    directory: directory ?? "/repo",
+    project: { id: "project-a", directory: directory ?? "/repo", canonical: directory ?? "/repo" },
+  }))
+  config.mockResolvedValue({})
+  statuses.mockResolvedValue({})
+  commands.mockResolvedValue([])
+  mcp.mockResolvedValue([])
+  vcs.mockResolvedValue({ branch: "main" })
+  forms.mockResolvedValue([])
+  permissions.mockResolvedValue([])
+})
+
+afterEach(() => {
+  expect(getBackgroundNetworkState().active).toBe(0)
+})
+
+const inputFor = (state: Partial<State> = {}) => {
+  const store = createStore<State>(() => ({ ...INITIAL_STATE, ...state }))
+  return {
+    directory: "/repo", store,
+    set: (patch: Partial<State>) => { store.setState(patch) },
+    global: { config: {}, projects: [], path: { directory: "", worktree: "", home: "/home" } },
+    loadSessions: async () => undefined,
+  }
+}
+
+const form = (id: string, title = "Pick"): FormRequest => ({
+  id, sessionID: "session", title, fields: [{ key: "answer", type: "boolean" }],
 })
 
 describe("bootstrapDirectory", () => {
-  test("prioritizes session loading without waiting for deferred fields", async () => {
-    const state = { current: createState() }
-    let deferredStarted = false
-    let resolveDeferred!: () => void
-    const deferred = new Promise<unknown[]>((resolve) => {
-      resolveDeferred = () => resolve([])
+  for (const field of ["config", "mcp"] as const) {
+    test(`finishes session loading while ${field} is unresolved`, async () => {
+      const blocked = deferred<void>()
+      if (field === "config") config.mockImplementation(async () => { await blocked.promise; return {} })
+      else mcp.mockImplementation(async () => { await blocked.promise; return [] })
+      const input = inputFor()
+      let initialized = false
+      const bootstrap = bootstrapDirectory(input)
+      void bootstrap.environment.then(() => { initialized = true })
+      try {
+        expect(await bootstrap.sessions).toBe("complete")
+        expect(initialized).toBe(false)
+        expect(input.store.getState().status).toBe("partial")
+      } finally {
+        blocked.resolve()
+        expect(await bootstrap.environment).toBe("complete")
+        expect(input.store.getState().status).toBe("complete")
+      }
     })
-    let resolveSessions!: () => void
-    const sessions = new Promise<void>((resolve) => {
-      resolveSessions = resolve
-    })
-    let settled = false
-    client.listCommands = async () => {
-      deferredStarted = true
-      return deferred
+  }
+
+  test("keeps session-list failure separate from successful environment initialization", async () => {
+    const cached: Session[] = [{
+      id: "cached", projectID: "project-a", directory: "/repo", title: "Cached",
+      time: { created: 1, updated: 1 }, cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }]
+    const input = inputFor({ session: cached })
+    const bootstrap = bootstrapDirectory({ ...input, loadSessions: async () => { throw new Error("unavailable") } })
+    expect(await bootstrap.sessions).toBe("failed")
+    expect(await bootstrap.environment).toBe("complete")
+    expect(input.store.getState().session).toBe(cached)
+  })
+
+  test("a config failure cannot suppress status or pending-form recovery", async () => {
+    config.mockRejectedValue(Object.assign(new Error("invalid config"), { status: 400 }))
+    const pending = form("pending")
+    forms.mockResolvedValue([pending])
+    const input = inputFor()
+    const bootstrap = bootstrapDirectory(input)
+    expect(await bootstrap.sessions).toBe("complete")
+    expect(await bootstrap.environment).toBe("failed")
+    expect(input.store.getState().form.session).toEqual([pending])
+    expect(input.store.getState().sessionStatusReady).toBe(true)
+  })
+
+  test("a failed status snapshot preserves live state and does not grant idle authority", async () => {
+    const previous: State["session_status"] = { session: { type: "busy" } }
+    statuses.mockResolvedValue(null)
+    const input = inputFor({ session_status: previous })
+    const bootstrap = bootstrapDirectory(input)
+    expect(await bootstrap.sessions).toBe("complete")
+    expect(await bootstrap.environment).toBe("failed")
+    expect(input.store.getState().session_status).toBe(previous)
+    expect(input.store.getState().sessionStatusReady).toBeUndefined()
+  })
+
+  test("optional MCP failure preserves its previous state without failing core initialization", async () => {
+    mcp.mockRejectedValue(Object.assign(new Error("MCP unavailable"), { status: 400 }))
+    const previous: State["mcp"] = { server: { name: "server", status: { status: "connected" } } }
+    const input = inputFor({ mcp: previous })
+    const bootstrap = bootstrapDirectory(input)
+    expect(await bootstrap.sessions).toBe("complete")
+    expect(await bootstrap.environment).toBe("complete")
+    expect(input.store.getState().mcp).toBe(previous)
+  })
+
+  test("rejects stale work before starting either phase", async () => {
+    const input = inputFor()
+    const state = input.store.getState()
+    let lists = 0
+    const bootstrap = bootstrapDirectory({ ...input, isStale: () => true, loadSessions: async () => { lists += 1 } })
+    expect(await bootstrap.sessions).toBe("stale")
+    expect(await bootstrap.environment).toBe("stale")
+    expect(lists).toBe(0)
+    for (const spy of spies) expect(spy.mock.calls).toHaveLength(0)
+    expect(input.store.getState()).toBe(state)
+  })
+
+  test("drops queued initialization reads after the directory generation changes", async () => {
+    const blocked = Array.from({ length: getBackgroundNetworkState().limit }, () => deferred<void>())
+    const occupied = blocked.map((task) => runBackgroundNetworkTask(() => task.promise))
+    let stale = false
+    const input = inputFor()
+    const bootstrap = bootstrapDirectory({ ...input, isStale: () => stale })
+    expect(await bootstrap.sessions).toBe("complete")
+    stale = true
+    const state = input.store.getState()
+    for (const task of blocked) task.resolve()
+    await Promise.all(occupied)
+    expect(await bootstrap.environment).toBe("stale")
+    for (const spy of spies) expect(spy.mock.calls).toHaveLength(0)
+    expect(input.store.getState()).toBe(state)
+  })
+
+  test("an in-flight response cannot commit after its initialization is superseded", async () => {
+    const response = deferred<State["config"]>()
+    const started = deferred<void>()
+    let stale = false
+    config.mockImplementation(() => { started.resolve(); return response.promise })
+    const input = inputFor()
+    const bootstrap = bootstrapDirectory({ ...input, isStale: () => stale })
+    await bootstrap.sessions
+    await started.promise
+    stale = true
+    const state = input.store.getState()
+    response.resolve({ instructions: ["old configuration"] })
+    expect(await bootstrap.environment).toBe("stale")
+    expect(input.store.getState()).toBe(state)
+  })
+
+  test("addresses directory reads explicitly and keeps v2 active-status discovery global", async () => {
+    for (const directory of ["/workspace/Alpha", "C:/Users/Developer/Tree", "//Server/Share/Project", "C:/Users/Ірина/Project with spaces/100%", "C:/"]) {
+      for (const spy of spies) spy.mock.calls.length = 0
+      const input = { ...inputFor(), directory }
+      const bootstrap = bootstrapDirectory(input)
+      expect(await bootstrap.sessions).toBe("complete")
+      expect(await bootstrap.environment).toBe("complete")
+      for (const spy of [location, config, commands, mcp, vcs]) expect(spy.mock.calls).toEqual([[directory]])
+      for (const spy of [forms, permissions]) expect(spy.mock.calls).toEqual([[{ directories: [directory], includeGlobal: false }]])
+      expect(statuses.mock.calls).toEqual([[]])
+      expect(input.store.getState().path.directory).toBe(directory)
     }
-    const bootstrapping = run(state, () => sessions).then((result: string) => {
-      settled = true
-      return result
+  })
+
+  test("an authoritative empty form list clears old records", async () => {
+    const input = inputFor({ form: { session: [form("old")] } })
+    const bootstrap = bootstrapDirectory(input)
+    await bootstrap.sessions
+    expect(await bootstrap.environment).toBe("complete")
+    expect(input.store.getState().form).toEqual({})
+  })
+
+  test("failed form recovery preserves previous forms", async () => {
+    const previous = { session: [form("old")] }
+    forms.mockRejectedValue(Object.assign(new Error("unavailable"), { status: 400 }))
+    const input = inputFor({ form: previous })
+    const bootstrap = bootstrapDirectory(input)
+    await bootstrap.sessions
+    expect(await bootstrap.environment).toBe("failed")
+    expect(input.store.getState().form).toBe(previous)
+  })
+
+  test("retries transient form failures without replaying the session list", async () => {
+    let lists = 0
+    const pending = form("pending")
+    forms.mockRejectedValueOnce(Object.assign(new Error("warming up"), { status: 503 })).mockResolvedValue([pending])
+    const input = inputFor()
+    const bootstrap = bootstrapDirectory({ ...input, loadSessions: async () => { lists += 1 } })
+    expect(await bootstrap.sessions).toBe("complete")
+    expect(await bootstrap.environment).toBe("complete")
+    expect(forms.mock.calls).toHaveLength(2)
+    expect(lists).toBe(1)
+    expect(input.store.getState().form.session).toEqual([pending])
+  })
+
+  test("fetched forms replace unchanged records and retain same-session live additions", async () => {
+    const old = form("form-1")
+    const added = form("form-2")
+    const updated = form("form-1", "Updated")
+    const input = inputFor({ form: { session: [old] } })
+    forms.mockImplementation(async () => {
+      input.store.setState({ form: { session: [old, added] } })
+      return [updated]
     })
-
-    await tick()
-    expect(deferredStarted).toBe(false)
-    expect(settled).toBe(false)
-    expect(state.current.status).toBe("complete")
-    expect(state.current.project).toBe("project-a")
-    expect(state.current.path).toEqual({ directory: "/repo", worktree: "/repo", home: "/home" })
-
-    resolveSessions()
-    expect(await bootstrapping).toBe("complete")
-    await tick()
-    expect(deferredStarted).toBe(true)
-    resolveDeferred()
-  })
-
-  test("a failed status snapshot leaves the prior status untouched", async () => {
-    const state = { current: { ...createState(), session_status: { ses_1: { type: "busy" as const } } } }
-    client.getActiveSessionStatuses = async () => null
-    expect(await run(state)).toBe("complete")
-    expect(state.current.session_status).toEqual({ ses_1: { type: "busy" } })
-    expect(state.current.sessionStatusReady).toBeUndefined()
-  })
-
-  test("deferred phase merges fetched forms by session, replacing the pre-fetch record", async () => {
-    const state = { current: { ...createState(), form: { ses_1: [form("form_1", "ses_1")] } } }
-    const fetched = [form("form_2", "ses_1"), form("form_1", "ses_1", "Updated")]
-    client.listPendingForms = async () => fetched
-
-    await run(state)
-    await tick()
-
-    expect(state.current.form.ses_1?.map((f) => f.id)).toEqual(["form_1", "form_2"])
-    expect(state.current.form.ses_1?.[0]?.title).toBe("Updated")
-  })
-
-  test("deferred phase deletes a session's forms when they disappear and nothing changed meanwhile", async () => {
-    const state = { current: { ...createState(), form: { ses_1: [form("form_1", "ses_1")], ses_2: [form("form_3", "ses_2")] } } }
-    client.listPendingForms = async () => []
-
-    await run(state)
-    await tick()
-
-    expect(state.current.form).toEqual({})
-  })
-
-  test("deferred phase preserves in-flight form changes when the signature changed", async () => {
-    const state = { current: { ...createState(), form: { ses_1: [form("form_1", "ses_1")] } } }
-    client.listPendingForms = async () => {
-      // A live event lands while the fetch is in flight.
-      state.current = { ...state.current, form: { ...state.current.form, ses_1: [form("form_1", "ses_1"), form("form_2", "ses_1")] } }
-      return []
-    }
-
-    await run(state)
-    await tick()
-
-    expect(state.current.form.ses_1?.map((f) => f.id)).toEqual(["form_1", "form_2"])
+    const bootstrap = bootstrapDirectory(input)
+    await bootstrap.sessions
+    expect(await bootstrap.environment).toBe("complete")
+    expect(input.store.getState().form.session).toEqual([updated, added])
   })
 })

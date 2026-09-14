@@ -3232,6 +3232,8 @@ export const dict = {
   'chat.container.sessionLoadError.retry': 'Erneut versuchen',
   'sessions.sidebar.group.empty.loadingSessions': 'Sitzungen werden geladen...',
   'sessions.sidebar.group.empty.loadFailed': 'Sitzungen konnten nicht geladen werden',
+  'sessions.sidebar.group.empty.initializationFailed': 'Arbeitsbereich konnte nicht initialisiert werden.',
+  'sessions.search.submitHint': 'Zum Suchen die Eingabetaste drücken',
   'sessions.sidebar.group.empty.retry': 'Erneut versuchen',
   'sessions.sidebar.group.empty.permissionDenied': 'Ordnerzugriff ist erforderlich.',
   'sessions.sidebar.group.empty.grantAccess': 'Zugriff gewähren',

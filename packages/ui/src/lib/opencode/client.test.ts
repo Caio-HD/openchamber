@@ -113,6 +113,31 @@ describe("request fidelity", () => {
     expect(requests[0].url.searchParams.has("directory")).toBe(false)
     expect(requests[0].headers.has("x-opencode-directory")).toBe(false)
   })
+test('Windows drive roots remain absolute in directory selection and SDK client identity', () => {
+  const previous = opencodeClient.getDirectory();
+  try {
+    opencodeClient.setDirectory('c:\\');
+    expect(opencodeClient.getDirectory()).toBe('C:/');
+    expect(opencodeClient.getScopedSdkClient('c:\\')).toBe(opencodeClient.getScopedSdkClient('C:/'));
+    expect(opencodeClient.getScopedSdkClient('C:/')).not.toBe(opencodeClient.getScopedSdkClient('C:'));
+  } finally {
+    opencodeClient.setDirectory(previous);
+  }
+});
+
+test('Windows separators and UNC representations share SDK clients without lowercasing directory names', () => {
+  expect(opencodeClient.getScopedSdkClient('c:\\Users\\Developer\\Project\\'))
+    .toBe(opencodeClient.getScopedSdkClient('C:/Users/Developer/Project'));
+  expect(opencodeClient.getScopedSdkClient('\\\\Server\\Share\\Project\\'))
+    .toBe(opencodeClient.getScopedSdkClient('//Server/Share/Project'));
+  expect(opencodeClient.getScopedSdkClient('/repo/Project'))
+    .not.toBe(opencodeClient.getScopedSdkClient('/repo/project'));
+});
+
+test('a drive-root system-info fallback stays absolute', async () => {
+  responses.push(json({ directory: 'C:/', project: { id: 'project', directory: 'C:/', canonical: 'C:/' } }));
+  expect((await opencodeClient.getSystemInfo()).homeDirectory).toBe('C:/');
+});
 
   test("the current directory scopes calls that pass none", async () => {
     opencodeClient.setDirectory("/repo/current")

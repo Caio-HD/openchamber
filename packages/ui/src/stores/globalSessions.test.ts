@@ -3,6 +3,7 @@ import { opencodeClient } from '@/lib/opencode/client';
 import { describe, expect, test } from 'bun:test'
 import type { SessionListOptions, SessionPage } from '@/lib/opencode/client'
 import type { Session } from '@/lib/opencode/model'
+import { OpenCode } from '@opencode/client'
 
 import {
   filterManagedChatsForRuntime,
@@ -46,6 +47,30 @@ describe('managed Chats runtime visibility', () => {
 })
 
 describe('listGlobalSessionPages', () => {
+  test('uses the next cursor from the SDK HTTP response rather than guessing from session timestamps', async () => {
+    const cursors: Array<string | null> = []
+    const apiClient = OpenCode.make({
+      baseUrl: 'https://sessions.test',
+      fetch: async (request) => {
+        const url = new URL(request instanceof Request ? request.url : request.toString())
+        const cursor = url.searchParams.get('cursor')
+        cursors.push(cursor)
+        return cursor === null
+          ? Response.json({ data: [
+            makeSession({ id: 'first', time: { created: 1, updated: 20 } }),
+            makeSession({ id: 'second', time: { created: 1, updated: 10 } }),
+          ], cursor: { next: 'opaque-8' } })
+          : Response.json({ data: [makeSession({ id: 'last', time: { created: 1, updated: 5 } })], cursor: {} })
+      },
+    })
+    const sessions = await listGlobalSessionPages(async ({ cursor, limit }) => {
+      const response = await apiClient.session.list({ cursor, limit })
+      return { sessions: response.data.map((session) => makeSession(session)), cursor: { next: response.cursor.next ?? undefined } }
+    }, { pageSize: 2 })
+    expect(cursors).toEqual([null, 'opaque-8'])
+    expect(sessions.map((session) => session.id)).toEqual(['first', 'second', 'last'])
+  })
+
   test('sanitizes session list records before returning them', async () => {
     const listPage = pager([
       {

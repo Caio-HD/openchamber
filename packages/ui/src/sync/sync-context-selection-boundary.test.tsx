@@ -1,8 +1,9 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OpenCode } from '@opencode/client'
-import { SyncProvider, useSyncDirectory } from './sync-context'
+import { opencodeClient } from '@/lib/opencode/client'
+import { SyncProvider, useChildStoreManager, useSyncDirectory } from './sync-context'
 import { usePrefetchSessionMessages } from './use-sync'
 import { installHookTestDom } from '../components/session/sidebar/test-utils/testDom'
 
@@ -25,6 +26,60 @@ const createSdk = () => OpenCode.make({
 })
 
 describe('SyncProvider selection boundary', () => {
+  test('bounds failed session-page retries and preserves the last directory snapshot', async () => {
+    const dom = installHookTestDom()
+    const root = createRoot(dom.container)
+    let manager: ReturnType<typeof useChildStoreManager> | undefined
+    const Probe = () => {
+      manager = useChildStoreManager()
+      return null
+    }
+    let fail = false
+    let failedPageRequests = 0
+    const list = spyOn(opencodeClient, 'listSessionsPage').mockImplementation(async () => {
+      if (fail) {
+        failedPageRequests += 1
+        throw Object.assign(new Error('OpenCode API unavailable'), { status: 503 })
+      }
+      return { sessions: [], cursor: {} }
+    })
+    const sdk = createSdk()
+
+    try {
+      await act(async () => root.render(<SyncProvider sdk={sdk} directory="/workspace/a"><Probe /></SyncProvider>))
+      if (!manager) throw new Error('Bootstrap manager was not mounted')
+      const mountedManager = manager
+      const waitForState = (expected: 'complete' | 'failed') => new Promise<void>((resolve) => {
+        if (mountedManager.getBootstrapState('/workspace/a') === expected) return resolve()
+        const unsubscribe = mountedManager.subscribeBootstrap(() => {
+          if (mountedManager.getBootstrapState('/workspace/a') !== expected) return
+          unsubscribe()
+          resolve()
+        })
+      })
+      await act(() => waitForState('complete'))
+      const store = manager.getChild('/workspace/a')
+      if (!store) throw new Error('Directory store was not created')
+      const cached = [{
+        id: 'cached', title: 'Cached session', projectID: 'project',
+        directory: '/workspace/a', time: { created: 1, updated: 1 }, cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      }]
+      store.setState({ session: cached, sessionListSource: 'authoritative' })
+      fail = true
+      await act(async () => {
+        mountedManager.requestBootstrap({ directory: '/workspace/a', priority: 'selected', reason: 'current-directory', force: true })
+        await waitForState('failed')
+      })
+      expect(failedPageRequests).toBe(3)
+      expect(store.getState().session).toBe(cached)
+    } finally {
+      await act(async () => root.unmount())
+      list.mockRestore()
+      dom.restore()
+    }
+  }, 15_000)
+
   test('does not rerender a stable prefetch consumer when only current directory changes', async () => {
     const dom = installHookTestDom()
     const root = createRoot(dom.container)

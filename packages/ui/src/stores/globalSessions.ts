@@ -1,6 +1,6 @@
 import type { Session } from "@/lib/opencode/model";
 import type { SessionListOptions, SessionPage } from "@/lib/opencode/client";
-import { runBackgroundNetworkTask } from '@/lib/background-network';
+import { runSessionListNetworkTask } from '@/lib/background-network';
 import { retry } from "@/sync/retry";
 import { stripSessionListDetails } from "@/sync/sanitize";
 import { startSessionLoadPerformanceEvent } from "@/sync/session-load-performance";
@@ -70,17 +70,17 @@ export async function listGlobalSessionPages(
             operation,
             caller: cursor === undefined ? "initial-page" : "pagination",
         });
-        const page = await runBackgroundNetworkTask(() => retry(
-            async () => {
+        const page = await retry(
+            () => runSessionListNetworkTask(async () => {
                 attempts += 1;
                 return await listPage({
                     ...(options.directory ? { directory: options.directory } : { global: true }),
                     limit: options.pageSize,
                     ...(cursor !== undefined ? { cursor } : {}),
                 });
-            },
+            }),
             { attempts: 3, delay: 500, retryIf: () => true },
-        )).catch((error) => {
+        ).catch((error) => {
             finishPerformanceEvent("error", { retryCount: Math.max(0, attempts - 1) });
             throw error;
         });

@@ -2244,6 +2244,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.container.sessionLoadError.retry": "Reintentar",
   "sessions.sidebar.group.empty.loadingSessions": "Cargando sesiones…",
   "sessions.sidebar.group.empty.loadFailed": "No se pudieron actualizar las sesiones.",
+  "sessions.sidebar.group.empty.initializationFailed": "No se pudo inicializar el espacio de trabajo.",
+  "sessions.search.submitHint": "Pulsa Intro para buscar",
   "sessions.sidebar.group.empty.retry": "Reintentar",
   "sessions.sidebar.group.empty.permissionDenied": "Se requiere acceso a la carpeta.",
   "sessions.sidebar.group.empty.grantAccess": "Permitir acceso",
