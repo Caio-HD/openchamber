@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { persist } from 'zustand/middleware';
 import { z } from 'zod';
 import type {
@@ -1164,6 +1165,8 @@ export const useGitHubPrStatusStore = create<SourceControlStatusStore>()(
           return;
         }
 
+        const sourceControl = params.sourceControl;
+        const readContext = params.readContext;
         try {
           set((prev) => ({
             ...prev,
@@ -1171,22 +1174,23 @@ export const useGitHubPrStatusStore = create<SourceControlStatusStore>()(
             totalRequestCount: prev.totalRequestCount + 1,
           }));
           await acquirePrStatusNetworkSlot();
-          let next: SourceControlStatus;
+          let next: SourceControlStatus | null;
           try {
-            if (!isCurrent()) return;
-            // Failed requests need the same non-forced cooldown as successful
-            // refreshes. Record only work that reaches the network slot so a
-            // stale queued request cannot suppress its replacement.
-            lastRefreshBySignature.set(signature, Date.now());
-            next = withStatusAliases(await params.sourceControl.changeRequestStatus(
-              params.readContext,
-              params.branch,
-              { force: options?.force },
-            ));
+            next = await runBackgroundNetworkTask(async () => {
+              if (!isCurrent()) return null;
+              // Keep PR reads inside the aggregate HTTP budget as well as the
+              // PR-specific cap. Separate caps otherwise occupy every socket.
+              lastRefreshBySignature.set(signature, Date.now());
+              return withStatusAliases(await sourceControl.changeRequestStatus(
+                readContext,
+                params.branch,
+                { force: options?.force },
+              ));
+            });
           } finally {
             releasePrStatusNetworkSlot();
           }
-          if (!isCurrent()) return;
+          if (!next || !isCurrent()) return;
           set((prev) => {
             const nextEntries = { ...prev.entries };
             signatureKeys.forEach((signatureKey) => {
