@@ -63,12 +63,11 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git rev-parse --short HEAD)
-          gh release edit "$PREVIEW_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --prerelease \
-            --notes "Test builds of OpenChamber on OpenCode v2. Not a release: files here are replaced on every build, and this build does not update itself to a stable version.
-
-Current build: $VERSION from \`$REF\` ($sha), bundling OpenCode $(node -p "require('./packages/electron/package.json').opencodeCli.version")."
+          cli=$(node -p "require('./packages/electron/package.json').opencodeCli.version")
+          notes=$(printf '%s\n\n%s' \
+            "Test builds of OpenChamber on OpenCode v2. Not a release: files here are replaced on every build, and this build does not update itself to a stable version." \
+            "Current build: $VERSION from $REF ($sha), bundling OpenCode $cli.")
+          gh release edit "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --prerelease --notes "$notes"
 
   build-macos:
     name: macOS ${{ matrix.arch }}
