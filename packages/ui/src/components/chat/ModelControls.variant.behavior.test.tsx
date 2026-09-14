@@ -363,6 +363,26 @@ describe('ModelControls effort restore', () => {
     });
   });
 
+  for (const missing of ['request', 'body']) {
+    test(`renders a cached agent without ${missing}`, async () => {
+      const request = agent.request;
+      const body = request.body;
+      if (missing === 'request') Reflect.deleteProperty(agent, 'request');
+      else Reflect.deleteProperty(request, 'body');
+      try {
+        const { dom, cleanup } = await renderModelControls();
+        try {
+          expect(dom.container.querySelector('.model-controls__agent-label')?.textContent).toBe('Build');
+        } finally {
+          await cleanup();
+        }
+      } finally {
+        agent.request = request;
+        request.body = body;
+      }
+    });
+  }
+
   test('restores the concrete effort the session history carries', async () => {
     latestUserChoice = { id: 'msg-1', agent: AGENT, providerID: PROVIDER_ID, modelID: MODEL_ID, variant: 'low' };
     useUIStore.setState({ isModelSelectorOpen: true });

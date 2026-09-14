@@ -91,7 +91,7 @@ const AgentDescriptionTooltip: React.FC<{
  * each one is read back with an explicit check rather than trusted.
  */
 const agentSampling = (agent: Agent, key: 'temperature' | 'topP'): number | undefined => {
-    const value = agent.request.body[key];
+    const value = agent.request?.body?.[key];
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 };
 
