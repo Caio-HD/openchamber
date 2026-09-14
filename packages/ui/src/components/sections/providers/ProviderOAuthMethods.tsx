@@ -33,6 +33,12 @@ interface ProviderOAuthMethodsProps {
   methods: IntegrationOAuthMethod[];
   /** Called once a credential has been stored, so the caller can reload providers. */
   onConnected: () => void | Promise<void>;
+  /**
+   * Location the integration belongs to. Provider integrations are global;
+   * an MCP server's OAuth integration exists only in the Location whose config
+   * declares the server, so its requests must resolve that directory.
+   */
+  directory?: string | null;
   /** Layout only — the caller owns separation from whatever sits above. */
   className?: string;
 }
@@ -67,9 +73,14 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
   integrationId,
   methods,
   onConnected,
+  directory,
   className,
 }) => {
   const { t } = useI18n();
+  const sdk = React.useCallback(
+    () => (directory ? opencodeClient.getScopedSdkClient(directory) : opencodeClient.getSdkClient()),
+    [directory],
+  );
   const [flow, setFlow] = React.useState<Flow>(IDLE);
   const [fieldValues, setFieldValues] = React.useState<Record<string, FormValue>>({});
   const [codeInput, setCodeInput] = React.useState('');
@@ -78,11 +89,10 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
 
   const cancelAttempt = React.useCallback((attemptID: string) => {
     activeAttemptRef.current = null;
-    void opencodeClient
-      .getSdkClient()
+    void sdk()
       .integration.oauth.cancel({ integrationID: integrationId, attemptID })
       .catch(() => undefined);
-  }, [integrationId]);
+  }, [integrationId, sdk]);
 
   React.useEffect(() => () => {
     const pending = activeAttemptRef.current;
@@ -124,12 +134,12 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
    * is how cancel and unmount tear it down.
    */
   const pollAttempt = async (methodID: string, attemptID: string) => {
-    const sdk = opencodeClient.getSdkClient();
+    const client = sdk();
     while (activeAttemptRef.current === attemptID) {
       await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
       if (activeAttemptRef.current !== attemptID) return;
       try {
-        const { data: status } = await sdk.integration.oauth.status({ integrationID: integrationId, attemptID });
+        const { data: status } = await client.integration.oauth.status({ integrationID: integrationId, attemptID });
         if (activeAttemptRef.current !== attemptID) return;
         if (status.status === 'complete') {
           await succeed();
@@ -153,7 +163,7 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
 
     let attempt: OAuthAttempt;
     try {
-      const { data } = await opencodeClient.getSdkClient().integration.oauth.connect({
+      const { data } = await sdk().integration.oauth.connect({
         integrationID: integrationId,
         methodID: method.id,
         ...(Object.keys(answer).length > 0 ? { answer } : {}),
@@ -219,7 +229,7 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     const { methodID, attempt } = flow;
     setFlow({ ...flow, submitting: true });
     try {
-      await opencodeClient.getSdkClient().integration.oauth.complete({
+      await sdk().integration.oauth.complete({
         integrationID: integrationId,
         attemptID: attempt.attemptID,
         code,

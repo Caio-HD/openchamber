@@ -16,6 +16,7 @@ import {
   applyImportedMcpToDraft,
 } from './mcpImport';
 import { useMcpStore } from '@/stores/useMcpStore';
+import { McpOAuthSignIn } from './McpOAuthSignIn';
 import { useSettingsDirectory } from '@/hooks/useSettingsDirectory';
 import { cn } from '@/lib/utils';
 import { SettingsPageLayout } from '@/components/sections/shared/SettingsPageLayout';
@@ -940,6 +941,20 @@ export const McpPage: React.FC = () => {
     setIsDeleting(false);
   };
 
+  /**
+   * OpenCode has stored the OAuth credential; the server itself is still in
+   * `needs_auth` until it is connected again with that credential.
+   */
+  const handleOAuthConnected = async () => {
+    if (!selectedMcpName) return;
+    try {
+      await connectMcp(selectedMcpName, currentDirectory);
+      toast.success(t('settings.mcp.page.toast.connected'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('settings.mcp.page.toast.connectionTestFailed'));
+    }
+  };
+
   const handleToggleConnect = async () => {
     if (!selectedMcpName) return;
     setIsConnecting(true);
@@ -1132,6 +1147,14 @@ export const McpPage: React.FC = () => {
                       : t('settings.mcp.page.status.userScoped')}
                   </p>
                 </div>
+
+                {effectiveStatusName === 'needs_auth' && selectedMcpName && (
+                  <McpOAuthSignIn
+                    serverName={selectedMcpName}
+                    directory={currentDirectory}
+                    onConnected={handleOAuthConnected}
+                  />
+                )}
 
                 <div className="flex flex-wrap items-center gap-2">
                   {!isConnected && (
