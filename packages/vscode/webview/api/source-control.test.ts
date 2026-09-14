@@ -23,7 +23,11 @@ const respond = <Data>(request: { id: string; type: string }, data: Data): void 
   }));
 };
 
+// The bridge announces `webview:ready` once, before its first request. It is
+// the host handshake, not the request these tests follow, so it is skipped.
 const nextMessage = async () => {
+  for (let attempt = 0; attempt < 20 && messages.length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  if (messages[0]?.type === 'webview:ready') messages.shift();
   for (let attempt = 0; attempt < 20 && messages.length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   const message = messages.shift();
   assert.ok(message, 'expected a bridge message');

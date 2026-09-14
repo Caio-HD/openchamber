@@ -27,6 +27,7 @@ import {
   gitNetworkOperationSchema,
   planNetworkOperation,
   gitPush,
+  listGitDirectories,
   merge,
   popGitStash,
   rebase,
@@ -375,6 +376,26 @@ describe('gitApiHttp worktree bootstrap', () => {
       restoreMocks();
     }
   });
+});
+
+test('nested repository discovery scopes the workspace to the requested root', async () => {
+  installWindowMock();
+  const root = '/projects/plugin collection';
+  const repositories = [`${root}/first`, `${root}/second`];
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), 'http://localhost');
+    expect(url.pathname).toBe('/api/fs/git-dirs');
+    expect(url.searchParams.get('path')).toBe(root);
+    if (url.searchParams.get('directory') !== root) {
+      return Response.json({ error: 'Path is outside of active workspace' }, { status: 400 });
+    }
+    return Response.json({ repositories: repositories.map((path) => ({ path })) });
+  }, previousFetch);
+  try {
+    expect(await listGitDirectories(root)).toEqual(repositories);
+  } finally {
+    restoreMocks();
+  }
 });
 
 describe('gitApiHttp index mutations', () => {
