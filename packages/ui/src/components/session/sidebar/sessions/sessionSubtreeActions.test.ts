@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import type { Session } from '@opencode-ai/sdk/v2';
 import type { I18nKey } from '@/lib/i18n';
-import { runSessionSubtreeAction, type SessionSubtreeStore } from './sessionSubtreeActions';
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
+import { collectSessionSubtreeIds, runSessionSubtreeAction, type SessionSubtreeStore } from './sessionSubtreeActions';
 
 const session = (id: string): Session => ({
   id,
@@ -107,3 +108,54 @@ describe('runSessionSubtreeAction', () => {
     expect(outcome).toEqual({ succeededIds: ['root', 'child'], failedIds: ['grandchild'] });
   });
 });
+
+describe('collectSessionSubtreeIds', () => {
+  const linked = (id: string, parentID: string | null, archived?: number): Session => {
+    // SAFETY: the subtree walk reads only id, parentID, and time.archived.
+    return { ...session(id), parentID, time: { created: 1, updated: 1, ...(archived ? { archived } : {}) } } as Session;
+  };
+
+  beforeEach(() => {
+    useGlobalSessionsStore.setState({
+      activeSessions: [],
+      archivedSessions: [],
+      sessionsByDirectory: new Map(),
+      entityById: new Map(),
+      structure: {
+        activeSessionIds: [],
+        activeRootIds: [],
+        activeChildrenByParentId: new Map(),
+        activeIdsByDirectory: new Map(),
+      },
+      hasLoaded: false,
+      status: 'idle',
+    });
+  });
+
+  test('reaches an active session below an archived intermediate and skips the intermediate for archive', () => {
+    useGlobalSessionsStore.getState().upsertSessions([
+      linked('root', null),
+      linked('archived-child', 'root', 5),
+      linked('leaf', 'archived-child'),
+    ]);
+
+    expect(collectSessionSubtreeIds('root', [], false)).toEqual(['leaf']);
+  });
+
+  test('includes archived descendants for delete', () => {
+    useGlobalSessionsStore.getState().upsertSessions([
+      linked('root', null),
+      linked('archived-child', 'root', 5),
+      linked('leaf', 'archived-child'),
+    ]);
+
+    expect(collectSessionSubtreeIds('root', [], true)).toEqual(['archived-child', 'leaf']);
+  });
+
+  test('keeps descendants the surface already knows that the global cache has not seen', () => {
+    useGlobalSessionsStore.getState().upsertSessions([linked('root', null), linked('cached-child', 'root')]);
+
+    expect(collectSessionSubtreeIds('root', ['live-child', 'cached-child'], false)).toEqual(['live-child', 'cached-child']);
+  });
+});
+

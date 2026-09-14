@@ -6,7 +6,7 @@ import { useI18n } from '@/lib/i18n';
 import { useUIStore } from '@/stores/useUIStore';
 import { streamPerfMark } from '@/stores/utils/streamDebug';
 import { useSessionUIStore } from '@/sync/session-ui-store';
-import { runSessionSubtreeAction } from './sessionSubtreeActions';
+import { collectSessionSubtreeIds, runSessionSubtreeAction } from './sessionSubtreeActions';
 
 export type DeleteSessionSource = {
   archivedBucket?: boolean;
@@ -224,7 +224,7 @@ export const useSessionActions = (args: Args) => {
   const handleDeleteSession = React.useCallback(
     (session: Session, source?: DeleteSessionSource) => {
       const shouldHardDelete = source?.archivedBucket === true || source?.hardDelete === true;
-      const effectiveDescendantIds = [...descendantIds];
+      const effectiveDescendantIds = collectSessionSubtreeIds(session.id, descendantIds, shouldHardDelete);
       if (!showDeletionDialog || source?.skipConfirm === true) {
         void executeDeleteSession(session, source, { descendantIds: effectiveDescendantIds });
         return;
