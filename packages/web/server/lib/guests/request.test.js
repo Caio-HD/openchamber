@@ -168,3 +168,39 @@ describe('credential target', () => {
     }
   });
 });
+
+describe('a 401 while the user reconnects', () => {
+  test('drops only the tokens the request was refused with, not the new connection', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-req-'));
+    const persistPath = guestAuthPersistPath(dir);
+    const target = credentialTarget(clickupGuest.integration);
+    await patchGuestAuth('clickup', {
+      clientId: 'app-id', clientSecret: 'app-secret', clientTarget: target,
+      accessToken: 'access-a', refreshToken: 'refresh-a', target,
+    }, persistPath);
+    const originalFetch = globalThis.fetch;
+    let releaseRefresh;
+    const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+    globalThis.fetch = async (url) => {
+      if (String(url) === 'https://api.clickup.com/api/v2/oauth/token') {
+        await refreshGate;
+        return new Response(JSON.stringify({ access_token: 'access-a2', refresh_token: 'refresh-a2', token_type: 'Bearer', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('nope', { status: 401 });
+    };
+    try {
+      const request = proxyGuestRequest({ guest: clickupGuest, persistPath, method: 'GET', path: '/api/v2/user' });
+      // The user connects again while the refresh is in flight.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await patchGuestAuth('clickup', { accessToken: 'access-b', refreshToken: 'refresh-b', target }, persistPath);
+      releaseRefresh();
+      await expect(request).rejects.toMatchObject({ code: 'DISCONNECTED' });
+      const stored = await getGuestAuth('clickup', persistPath);
+      expect(stored.accessToken).toBe('access-b');
+      expect(stored.refreshToken).toBe('refresh-b');
+    } finally {
+      globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

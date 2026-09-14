@@ -84,9 +84,14 @@ export const proxyGuestRequest = async ({ guest, persistPath, method, path, quer
     const refreshed = hostToken
       ? await resolveHostAccessToken(guest.integration)
       : await refreshGuestAccessToken({ guest, persistPath }).catch(() => null);
+    // Only the tokens this request was refused with are dropped. A refresh
+    // that came back null because the user connected again meanwhile (new
+    // tokens, maybe a new target) must leave that new connection alone.
+    const refusedWith = accessToken;
+    const dropRefused = () => dropGuestTokens(guest.id, persistPath, (current) => current?.accessToken === refusedWith);
     if (!refreshed || refreshed === accessToken) {
       if (!hostToken) {
-        await dropGuestTokens(guest.id, persistPath);
+        await dropRefused();
       }
       throw new GuestOAuthError('Not connected.', 'DISCONNECTED');
     }
@@ -94,7 +99,7 @@ export const proxyGuestRequest = async ({ guest, persistPath, method, path, quer
     response = await sendAuthorized(url, method, body, accessToken, api.authorization);
     if (response.status === 401) {
       if (!hostToken) {
-        await dropGuestTokens(guest.id, persistPath);
+        await dropGuestTokens(guest.id, persistPath, (current) => current?.accessToken === refreshed);
       }
       throw new GuestOAuthError('Not connected.', 'DISCONNECTED');
     }

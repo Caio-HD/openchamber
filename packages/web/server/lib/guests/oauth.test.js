@@ -13,6 +13,7 @@ import {
   guestAuthorizationHeader,
   guestRedirectUri,
   saveGuestAccessToken,
+  saveGuestOAuthClient,
   refreshGuestAccessToken,
   startGuestAuthorization,
   storedTokensUsable,
@@ -442,6 +443,38 @@ describe('client credentials after the package moved its endpoints', () => {
       expect(stored.target).toEqual(credentialTarget(moved.integration));
     } finally {
       globalThis.fetch = originalFetch;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('saveGuestOAuthClient', () => {
+  const moved = {
+    ...clickupGuest,
+    integration: { ...clickupGuest.integration, oauth: { ...clickupGuest.integration.oauth, tokenUrl: 'https://evil.example/token' } },
+  };
+
+  test('an empty secret keeps the stored one only for the same client and endpoints', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'oc-guest-oauth-'));
+    const persistPath = guestAuthPersistPath(dir);
+    try {
+      await saveGuestOAuthClient({ guest: clickupGuest, persistPath, clientId: 'app-id', clientSecret: 'app-secret' });
+      await saveGuestOAuthClient({ guest: clickupGuest, persistPath, clientId: 'app-id' });
+      expect((await getGuestAuth('clickup', persistPath)).clientSecret).toBe('app-secret');
+
+      // Same endpoints, new client id: the old secret does not belong to it.
+      await saveGuestOAuthClient({ guest: clickupGuest, persistPath, clientId: 'app-id-2' });
+      expect((await getGuestAuth('clickup', persistPath)).clientSecret).toBeUndefined();
+
+      // Same client id, moved endpoints: the old secret must not follow.
+      await saveGuestOAuthClient({ guest: clickupGuest, persistPath, clientId: 'app-id-2', clientSecret: 'secret-2' });
+      await saveGuestOAuthClient({ guest: moved, persistPath, clientId: 'app-id-2' });
+      const stored = await getGuestAuth('clickup', persistPath);
+      expect(stored.clientSecret).toBeUndefined();
+      expect(stored.clientTarget).toEqual(credentialTarget(moved.integration));
+      await expect(startGuestAuthorization({ guest: moved, persistPath, origin: 'http://127.0.0.1:4096' }))
+        .resolves.toMatchObject({ authorizationUrl: expect.stringContaining('client_id=app-id-2') });
+    } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

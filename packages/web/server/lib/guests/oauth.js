@@ -289,6 +289,34 @@ export const takeUsableGuestAuth = async (guest, persistPath) => {
   return getGuestAuth(guest.id, persistPath);
 };
 
+/**
+ * Save the OAuth client the user entered on the Integrations card. The
+ * client is bound to the endpoints the package names now. An empty secret
+ * keeps the stored one only for the same client id and the same endpoints;
+ * a new id or moved endpoints drop the old secret instead of carrying it
+ * over. Decided under the store lock against the entry as it is then.
+ */
+export const saveGuestOAuthClient = async ({ guest, persistPath, clientId, clientSecret }) => {
+  if (resolveIntegrationAuth(guest.integration ?? {}) !== 'oauth') {
+    throw new GuestOAuthError('This guest does not declare OAuth.', 'NO_INTEGRATION');
+  }
+  const id = readTrimmedString(clientId);
+  const secret = readTrimmedString(clientSecret);
+  if (!id) {
+    throw new GuestOAuthError('Client id is missing.', 'CLIENT_MISSING');
+  }
+  const clientTarget = credentialTarget(guest.integration);
+  return patchGuestAuth(guest.id, (current) => {
+    const next = { clientId: id, clientTarget };
+    if (secret) {
+      next.clientSecret = secret;
+    } else if (readTrimmedString(current?.clientId) !== id || !sameTarget(current?.clientTarget, clientTarget)) {
+      next.clientSecret = undefined;
+    }
+    return next;
+  }, persistPath);
+};
+
 export const saveGuestAccessToken = async ({ guest, persistPath, token, username }) => {
   if (resolveIntegrationAuth(guest.integration ?? {}) !== 'token') {
     throw new GuestOAuthError('This guest does not accept a pasted token.', 'NO_TOKEN_AUTH');

@@ -39,8 +39,8 @@ import {
 import {
   GuestOAuthError,
   consumeGuestAuthorization,
-  credentialTarget,
   disconnectGuestAuth,
+  saveGuestOAuthClient,
   guestRedirectUri,
   saveGuestAccessToken,
   startGuestAuthorization,
@@ -354,13 +354,12 @@ export const registerGuestRoutes = (app, {
       if (!parsed.success) {
         return res.status(400).json({ error: 'invalid-client' });
       }
-      // Entered for the endpoints the package names right now; a later
-      // version that moves them gets nothing until the user enters new ones.
-      const next = { clientId: parsed.data.clientId, clientTarget: credentialTarget(guest.integration) };
-      if (parsed.data.clientSecret) {
-        next.clientSecret = parsed.data.clientSecret;
-      }
-      const stored = await patchGuestAuth(guest.id, next, authPath);
+      const stored = await saveGuestOAuthClient({
+        guest,
+        persistPath: authPath,
+        clientId: parsed.data.clientId,
+        clientSecret: parsed.data.clientSecret,
+      });
       res.json(toPublicGuestAuth(stored, guest.integration));
     } catch (error) {
       console.error('Failed to save guest oauth client:', error);

@@ -117,6 +117,8 @@ export const getGuestAuth = async (guestId, persistPath) => {
  * With `expect`, the patch only lands when the entry read under the lock
  * satisfies it; a caller that spent a network round trip on the old entry
  * (a token refresh) uses this to drop its result when the entry moved on.
+ * `patch` may be a function of the entry read under the lock, for a change
+ * that depends on what is there (a client id replacing another one).
  * Returns the entry as stored afterwards, or `null` when it is gone.
  */
 export const patchGuestAuth = (guestId, patch, persistPath, expect = null) => withAuthStoreLock(persistPath, async () => {
@@ -126,7 +128,8 @@ export const patchGuestAuth = (guestId, patch, persistPath, expect = null) => wi
     return current;
   }
   const next = { ...(current ?? {}) };
-  for (const [key, value] of Object.entries(patch)) {
+  const resolvedPatch = typeof patch === 'function' ? patch(current) : patch;
+  for (const [key, value] of Object.entries(resolvedPatch)) {
     if (value === undefined) {
       delete next[key];
     } else {
@@ -148,7 +151,12 @@ export const patchGuestAuth = (guestId, patch, persistPath, expect = null) => wi
   return guests[guestId] ?? null;
 });
 
-export const dropGuestTokens = async (guestId, persistPath) => {
+/**
+ * Forget the tokens. With `expect`, only when the entry read under the lock
+ * still holds the tokens the caller is reacting to; a caller that saw a 401
+ * on one access token must not erase a newer connection made meanwhile.
+ */
+export const dropGuestTokens = async (guestId, persistPath, expect = null) => {
   const current = await getGuestAuth(guestId, persistPath);
   if (!current) {
     return null;
@@ -161,7 +169,7 @@ export const dropGuestTokens = async (guestId, persistPath) => {
     expiresAt: undefined,
     account: undefined,
     authorizedAt: undefined,
-  }, persistPath);
+  }, persistPath, expect);
 };
 
 /** Drop everything stored for a guest: tokens, client credentials, and settings. Used when the package is removed. */
