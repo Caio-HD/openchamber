@@ -13,7 +13,9 @@
  *
  * See `scripts/oc-dev.config.example.json` for the shape. The config can set
  * local device/app preferences such as `ios.deviceName`, `ios.useXcodeBeta`,
- * and `ios.xcodeAppName`, and can define `remoteDeployments`. Remote deploy
+ * `ios.xcodeAppName`, and `electron.opencodeConfigDir` (prefilled when the
+ * Electron start asks for a separate OpenCode config directory), and can
+ * define `remoteDeployments`. Remote deploy
  * menu entries are shown only when configured. Maintainer-only actions such as
  * release creation are hidden unless `features.releaseTools` is true.
  *
@@ -552,17 +554,44 @@ async function mobileTools(options, config) {
  * database (separate tables) but not the config file, which v1 rejects once
  * v2 has written to it.
  */
-function devAppEnv(options) {
-  if (!options.opencodeConfigDir) return {};
-  const configDir = path.resolve(options.opencodeConfigDir.replace(/^~(?=$|\/)/, os.homedir()));
+function devAppEnv(opencodeConfigDir) {
+  if (!opencodeConfigDir) return {};
+  const configDir = path.resolve(opencodeConfigDir.replace(/^~(?=$|\/)/, os.homedir()));
   if (!existsSync(configDir)) throw new Error(`OpenCode config directory not found: ${configDir}`);
   log.info(`Using OpenCode config directory ${configDir}`);
   return { OPENCODE_CONFIG_DIR: configDir };
 }
 
-function startElectronApp(options) {
+/**
+ * The flag wins; otherwise an interactive run asks, with the last directory
+ * from `oc-dev.json` (`electron.opencodeConfigDir`) prefilled; a non-TTY run
+ * keeps OpenCode's default directory instead of hanging on a prompt.
+ */
+async function chooseOpencodeConfigDir(options, config) {
+  if (options.opencodeConfigDir) return options.opencodeConfigDir;
+  if (!isTty) return '';
+  const remembered = config.electron?.opencodeConfigDir || '';
+  const mode = await chooseValue('', [
+    { value: 'default', label: 'Default (~/.config/opencode)' },
+    { value: 'separate', label: 'Separate directory', hint: 'run this checkout beside a v1 install' },
+  ], 'OpenCode config for the Electron app');
+  if (mode === 'default') return '';
+  const value = await text({
+    message: 'OpenCode config directory',
+    initialValue: remembered || path.join(os.homedir(), '.config', 'opencode-v2'),
+    validate: (input) => (input.trim() ? undefined : 'Enter a directory path'),
+  });
+  if (isCancel(value)) {
+    cancel('Operation cancelled.');
+    process.exit(130);
+  }
+  return value.trim();
+}
+
+async function startElectronApp(options, config) {
+  const env = devAppEnv(await chooseOpencodeConfigDir(options, config));
   prepareOpenCodeCli();
-  run('bun', ['run', 'electron:dev'], { env: devAppEnv(options) });
+  run('bun', ['run', 'electron:dev'], { env });
 }
 
 function prepareOpenCodeCli() {
@@ -684,7 +713,7 @@ async function main() {
       await mobileTools(options, config);
       break;
     case 'start-electron-app':
-      startElectronApp(options);
+      await startElectronApp(options, config);
       break;
     case 'prepare-opencode-cli':
       prepareOpenCodeCli();
