@@ -1047,16 +1047,10 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
           if (!branch || !currentDirectory) return;
           const sourceBranch = status?.current ?? null;
           await git.createGitCommit(currentDirectory, message, { addAll: true });
-          let pushedRemoteName: string | null = null;
           if (pushAfter) {
-            const trackingRemoteName = status?.tracking?.split('/')[0];
-            const remote = effectiveRemotes.find((entry) => entry.name === trackingRemoteName) ?? effectiveRemotes[0];
             try {
-              if (!remote) throw new Error(t('mobile.changes.noRemote'));
-              await git.gitPush(currentDirectory, status?.tracking
-                ? { remote: remote.name }
-                : { remote: remote.name, branch: sourceBranch ?? undefined, options: ['--set-upstream'] });
-              pushedRemoteName = remote.name;
+              const executePush = await publishChooser.prepare('push');
+              await executePush();
             } catch {
               toast.error(t('gitView.dirtySwitch.pushFailed'));
               await refreshStatusAndBranches();
@@ -1065,8 +1059,8 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
             }
           }
           toast.success(sourceBranch
-            ? pushedRemoteName
-              ? t('gitView.toast.pushedToUpstream', { name: pushedRemoteName })
+            ? pushAfter
+              ? t('gitView.publish.succeeded')
               : t('gitView.dirtySwitch.committedNotPushed', { branch: sourceBranch })
             : t('gitView.toast.commitCreated'));
           await refreshStatusAndBranches();

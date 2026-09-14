@@ -2481,7 +2481,7 @@ export const GitView: React.FC<GitViewProps> = ({ isActive }) => {
       {!runtime.isVSCode ? <RepositoryConfigurationDialog
         open={isRepositoryConfigurationOpen}
         onOpenChange={setRepositoryConfigurationOpen}
-        directory={isActive ? currentDirectory ?? '' : ''}
+        directory={isActive ? gitDirectory ?? '' : ''}
       /> : null}
       <GitOperationStatus className="mx-4 mt-3" entry={operationRecovery.entry} onRefresh={() => void operationRecovery.refresh()} onCancel={() => void operationRecovery.cancel()} />
 

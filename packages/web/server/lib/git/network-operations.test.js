@@ -2230,6 +2230,9 @@ process.exit(safe ? 0 : 1);
     const destination = path.join(parent, 'checkout');
     const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_LFS_SKIP_SMUDGE: '1' };
     await execFileAsync('git', ['init', source], { env });
+    // A local clone copies loose objects directly. Keep automatic maintenance
+    // from repacking the fixture concurrently after add or commit returns.
+    await execFileAsync('git', ['config', 'maintenance.auto', 'false'], { cwd: source, env });
     for (let offset = 0; offset < count; offset += 128) {
       await Promise.all(Array.from({ length: Math.min(128, count - offset) }, (_, index) => {
         const number = offset + index;
@@ -2276,6 +2279,7 @@ process.exit(safe ? 0 : 1);
       expect(['client-missing', 'authorization-required']).toContain(result.hydration.status);
       await expect(fs.stat(destination)).resolves.toBeDefined();
     } else {
+      expect(result.error).toBeUndefined();
       expect(result).toMatchObject({ state: 'succeeded', hydration: { status: 'not-needed' } });
       expect((await fs.readdir(destination)).filter((name) => name !== '.git')).toHaveLength(count);
     }
