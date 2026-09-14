@@ -1,5 +1,6 @@
 import React from 'react';
 import { useUpdateStore } from '@/stores/useUpdateStore';
+import { useUIStore } from '@/stores/useUIStore';
 import { useShallow } from 'zustand/react/shallow';
 import { UpdateDialog } from '@/components/ui/UpdateDialog';
 import { useDeviceInfo } from '@/lib/device';
@@ -45,6 +46,8 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
     downloadUpdate: s.downloadUpdate,
     restartToUpdate: s.restartToUpdate,
   })));
+  const updateChannel = useUIStore((s) => s.updateChannel);
+  const setUpdateChannel = useUIStore((s) => s.setUpdateChannel);
   const { isMobile } = useDeviceInfo();
 
   const currentVersion = openChamberVersion || updateStore.info?.currentVersion || 'unknown';
@@ -279,6 +282,41 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
             <p className="typography-meta text-[var(--status-error)]">{updateStore.error}</p>
           </div>
         )}
+
+        <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 @xl:flex-row @xl:items-center @xl:justify-between">
+          <div className="flex flex-col">
+            <span className={SETTINGS_FIELD_LABEL_CLASS}>Update Channel</span>
+            <span className="typography-meta text-muted-foreground">
+              Choose Stable for official releases or Beta for pre-release builds
+            </span>
+          </div>
+          <div className="flex items-center gap-1 rounded-lg border border-border/50 p-1 bg-background/50">
+            <Button
+              type="button"
+              size="sm"
+              variant={updateChannel === 'stable' ? 'secondary' : 'ghost'}
+              className="h-7 text-xs px-3"
+              onClick={() => {
+                setUpdateChannel('stable');
+                void updateStore.checkForUpdates();
+              }}
+            >
+              Stable
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={updateChannel === 'beta' ? 'secondary' : 'ghost'}
+              className="h-7 text-xs px-3"
+              onClick={() => {
+                setUpdateChannel('beta');
+                void updateStore.checkForUpdates();
+              }}
+            >
+              Beta
+            </Button>
+          </div>
+        </div>
 
         <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 @xl:flex-row @xl:items-center @xl:justify-between">
           <span className={SETTINGS_FIELD_LABEL_CLASS}>{t('settings.openchamber.about.field.instanceUrls')}</span>

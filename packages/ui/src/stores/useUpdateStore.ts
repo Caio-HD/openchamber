@@ -106,8 +106,12 @@ function detectPlatform(): 'macos' | 'windows' | 'linux' | 'web' | 'android' | '
 function mapRuntimeParams(runtime: ClientRuntime): URLSearchParams {
   // Check if user has opted out of usage reporting (default: true/enabled from UI store)
   const shouldReportUsage = useUIStore.getState().reportUsage;
+  const updateChannel = useUIStore.getState().updateChannel || 'stable';
   
-  const params = new URLSearchParams({ reportUsage: shouldReportUsage ? 'true' : 'false' });
+  const params = new URLSearchParams({
+    reportUsage: shouldReportUsage ? 'true' : 'false',
+    channel: updateChannel,
+  });
   params.set('deviceClass', detectDeviceClass());
   params.set('arch', detectArch());
   params.set('platform', detectPlatform());
