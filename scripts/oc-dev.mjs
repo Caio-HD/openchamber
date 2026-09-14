@@ -71,6 +71,9 @@ Options:
   --adb-address <host:port>        Wireless ADB address for android-connect
   --vsix-cleanup <delete|keep>
   --version <semver>
+  --opencode-config-dir <path>     OpenCode config directory for the started Electron app
+                                   (OPENCODE_CONFIG_DIR); lets a v2 checkout run beside a v1
+                                   install without sharing opencode.json
   -h, --help
 
 Mobile tasks:
@@ -125,6 +128,9 @@ function parseArgs(argv) {
         break;
       case '--version':
         options.version = readValue();
+        break;
+      case '--opencode-config-dir':
+        options.opencodeConfigDir = readValue();
         break;
       default:
         if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`);
@@ -539,9 +545,24 @@ async function mobileTools(options, config) {
   }
 }
 
-function startElectronApp() {
+/**
+ * Environment for a started dev app. `OPENCODE_CONFIG_DIR` reaches the
+ * OpenChamber server and the managed OpenCode it spawns, so one machine can
+ * run a v2 checkout and a v1 install side by side: they share the sessions
+ * database (separate tables) but not the config file, which v1 rejects once
+ * v2 has written to it.
+ */
+function devAppEnv(options) {
+  if (!options.opencodeConfigDir) return {};
+  const configDir = path.resolve(options.opencodeConfigDir.replace(/^~(?=$|\/)/, os.homedir()));
+  if (!existsSync(configDir)) throw new Error(`OpenCode config directory not found: ${configDir}`);
+  log.info(`Using OpenCode config directory ${configDir}`);
+  return { OPENCODE_CONFIG_DIR: configDir };
+}
+
+function startElectronApp(options) {
   prepareOpenCodeCli();
-  run('bun', ['run', 'electron:dev']);
+  run('bun', ['run', 'electron:dev'], { env: devAppEnv(options) });
 }
 
 function prepareOpenCodeCli() {
@@ -663,7 +684,7 @@ async function main() {
       await mobileTools(options, config);
       break;
     case 'start-electron-app':
-      startElectronApp();
+      startElectronApp(options);
       break;
     case 'prepare-opencode-cli':
       prepareOpenCodeCli();

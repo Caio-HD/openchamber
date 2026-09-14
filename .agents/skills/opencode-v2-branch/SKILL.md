@@ -84,6 +84,24 @@ ignore it; the preview app keeps checking for updates (that is where install
 statistics come from) and never downgrades, since `2.0.0-preview.*` sorts
 above any `1.x`. The jobs mirror `release.yml` minus update manifests.
 
+## Running beside a v1 install
+
+A v1 OpenChamber (bundled OpenCode 1.x) and this branch cannot share
+`~/.config/opencode/opencode.json`: once the branch writes a v2-only key
+(`agents.<name>.permissions`, v2 MCP fields) the v1 binary exits with
+"Configuration is invalid". The sessions database is fine to share (v1 uses
+`session`, v2 `session_v2`; credentials are `auth.json` vs the `credential`
+table). So the branch runs on its own config copy, `~/.config/opencode-v2`:
+
+```
+bun run oc-dev start-electron-app --opencode-config-dir ~/.config/opencode-v2
+```
+
+The option sets `OPENCODE_CONFIG_DIR`, which both the OpenChamber server
+(`packages/web/server/lib/opencode/shared.js`) and the managed OpenCode read.
+If v1 stops starting anyway, the `agents` block has leaked into the real
+config again: remove it there.
+
 ## Keeping the branch alive
 
 - Merge `origin/main` into the branch (a merge, not a rebase: the cutover is
