@@ -51,16 +51,30 @@ const refreshPlugins = async (): Promise<void> => {
   await usePluginsStore.getState().loadPlugins({ force: true });
 };
 
-// The current list stays on screen until the fresh one lands. Emptying it
-// first would blank the composer's model and effort pickers and every
-// message footer's effort label for the length of the request, and OpenCode
-// publishes `catalog.updated` many times during one reply, so that blank
-// would read as flicker on every turn. `loadProviders` always re-reads (its
-// only short-circuit is an in-flight request for the same directory).
+// The current list stays on screen until the fresh one lands: emptying it
+// first would blank the composer's model and effort pickers and every message
+// footer's effort label for the length of the request. `loadProviders` always
+// re-reads (its only short-circuit is an in-flight request for the same
+// directory) and keeps the existing objects when nothing changed.
 const refreshProviders = async (): Promise<void> => {
   const config = useConfigStore.getState();
   config.invalidateModelMetadataCache();
   await config.loadProviders({ source: SOURCE });
+};
+
+/**
+ * How long after a credential change the model list is read a second time.
+ * OpenCode announces nothing when a provider plugin finishes loading its
+ * models after a login (Copilot, LM Studio and the like fetch them from the
+ * provider), so the first read right after `credential.updated` can land
+ * before those models exist.
+ */
+const PROVIDER_REREAD_AFTER_CREDENTIAL_MS = 5000;
+
+const refreshProvidersAfterCredentialChange = async (): Promise<void> => {
+  await refreshProviders();
+  await new Promise((resolve) => setTimeout(resolve, PROVIDER_REREAD_AFTER_CREDENTIAL_MS));
+  await refreshProviders();
 };
 
 /** The lists a catalog kind invalidates, in the order they are re-read. */
@@ -75,13 +89,14 @@ export function catalogRefreshTasks(kind: CatalogKind): Array<() => Promise<void
     case "plugin":
       return [refreshPlugins];
     case "provider":
-    case "model":
-    case "credential":
       return [refreshProviders];
-    // A config file can carry any of them, and OpenChamber's own plugin
-    // injection lives in one, so the whole set is re-read.
+    case "credential":
+      return [refreshProvidersAfterCredentialChange];
+    // A config file can carry any of them (a provider declared in
+    // opencode.json included), and OpenChamber's own plugin injection lives
+    // in one, so the whole set is re-read.
     case "config":
-      return [refreshAgents, refreshCommands, refreshSkills, refreshMcp, refreshPlugins];
+      return [refreshAgents, refreshCommands, refreshSkills, refreshMcp, refreshPlugins, refreshProviders];
     // Projects are the sync layer's own slice; nothing in Settings reads them
     // through these stores.
     case "project":

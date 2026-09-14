@@ -44,7 +44,6 @@ import { runBackgroundNetworkTask } from "@/lib/background-network"
 import { setActionRefs } from "./session-actions"
 import { setSyncRefs, getAllSyncSessions, emitSyncConfigChanged } from "./sync-refs"
 import { useSessionUIStore } from "./session-ui-store"
-import { catalogReloadDelay } from "./catalog-reload"
 import { stripSessionDiffSnapshots } from "./sanitize"
 import { upsertSessionRecord } from "./session-records"
 import {
@@ -1435,7 +1434,7 @@ async function reloadCatalog(kind: CatalogKind, childStores: ChildStoreManager):
     return
   }
   // No sync-store slice of their own: their consumers read them on demand.
-  if (kind === "skill" || kind === "credential" || kind === "plugin") return
+  if (kind === "skill" || kind === "plugin") return
 
   await Promise.all([...childStores.children.entries()].map(async ([directory, store]) => {
     try {
@@ -1443,11 +1442,15 @@ async function reloadCatalog(kind: CatalogKind, childStores: ChildStoreManager):
         store.setState({ agent: await opencodeClient.listAgents(directory) })
       } else if (kind === "command") {
         store.setState({ command: await opencodeClient.listCommands(directory) })
-      } else if (kind === "config") {
-        const config = await opencodeClient.getConfig(directory)
-        store.setState({ config })
-        emitSyncConfigChanged(directory, config)
       } else {
+        if (kind === "config") {
+          const config = await opencodeClient.getConfig(directory)
+          store.setState({ config })
+          emitSyncConfigChanged(directory, config)
+        }
+        // OpenCode announces no model-list change of its own, so the
+        // provider slice follows the two things that change it: a credential
+        // and the config (which can declare providers).
         const provider = await opencodeClient.getProvidersForConfig(directory)
         // Same catalog, same object: a re-read that changes nothing must not
         // re-render every provider consumer.
@@ -1466,15 +1469,9 @@ async function reloadCatalog(kind: CatalogKind, childStores: ChildStoreManager):
  * burst. Collect the kinds and re-read each one once the burst settles; the
  * lists are whole-slice reads, so a later event supersedes an earlier one of
  * the same kind anyway.
- *
- * OpenCode also publishes `catalog.updated` continuously while a reply
- * streams (dozens of times per turn, a few hundred milliseconds apart), which
- * a settle delay alone cannot absorb. Each kind is therefore re-read at most
- * once per `CATALOG_RELOAD_MIN_INTERVAL_MS`; events inside that window are
- * folded into one trailing re-read, so the last change is never dropped.
  */
+const CATALOG_RELOAD_DEBOUNCE_MS = 250
 const pendingCatalogKinds = new Set<CatalogKind>()
-const lastCatalogReloadAt = new Map<CatalogKind, number>()
 let catalogReloadTimer: ReturnType<typeof setTimeout> | null = null
 
 function scheduleCatalogReload(kind: CatalogKind, childStores: ChildStoreManager): void {
@@ -1484,12 +1481,8 @@ function scheduleCatalogReload(kind: CatalogKind, childStores: ChildStoreManager
     catalogReloadTimer = null
     const kinds = [...pendingCatalogKinds]
     pendingCatalogKinds.clear()
-    const now = Date.now()
-    for (const pending of kinds) {
-      lastCatalogReloadAt.set(pending, now)
-      void reloadCatalog(pending, childStores)
-    }
-  }, catalogReloadDelay(pendingCatalogKinds, lastCatalogReloadAt, Date.now()))
+    for (const pending of kinds) void reloadCatalog(pending, childStores)
+  }, CATALOG_RELOAD_DEBOUNCE_MS)
 }
 
 export function handleEvent(

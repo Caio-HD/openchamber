@@ -1750,8 +1750,6 @@ export const useConfigStore = create<ConfigStore>()(
                             if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
                             // A re-read that returns the same catalog keeps the arrays the
                             // store already holds, so nothing subscribed to them re-renders.
-                            // OpenCode publishes `catalog.updated` many times during one
-                            // reply, and each one lands here.
                             const nextProviders = isSameProviderCatalog(previousProviders, processedProviders)
                                 ? previousProviders
                                 : processedProviders;

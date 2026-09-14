@@ -89,7 +89,6 @@ export type CatalogKind =
   | "skill"
   | "plugin"
   | "provider"
-  | "model"
   | "credential"
   | "project"
 
@@ -727,8 +726,6 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
       return [{ type: "catalog.updated", properties: { kind: "skill" } }]
     case "plugin.updated":
       return [{ type: "catalog.updated", properties: { kind: "plugin" } }]
-    case "catalog.updated":
-      return [{ type: "catalog.updated", properties: { kind: "model" } }]
     case "credential.updated":
     case "credential.switched":
       return [{ type: "catalog.updated", properties: { kind: "credential" } }]

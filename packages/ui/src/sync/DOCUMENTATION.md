@@ -65,21 +65,29 @@ The composer compares normalized attachment MIME types with the selected model's
 ## Catalog changes apply live
 
 OpenCode v2 watches its own config files and rebuilds agents, commands, skills,
-MCP servers, plugins and the provider catalog by itself, announcing each rebuilt
-slice (`config.updated`, `agent.updated`, `command.updated`, `skill.updated`,
-`plugin.updated`, `catalog.updated`, `credential.*`). `events.ts` translates all
-of them into one `catalog.updated` sync event carrying a `kind`, and
-`reloadCatalog` re-reads that slice. Re-reads are rate-limited per kind
-(`catalog-reload.ts`): a burst settles for 250 ms and a kind is re-read at most
-once every 3 s with a trailing re-read, because OpenCode publishes
-`catalog.updated` dozens of times while a reply streams. A re-read that
-returns an identical catalog keeps the objects already in the stores, so
-nothing re-renders. Nothing in the UI asks the user to apply or
-restart anything: the only setting OpenCode cannot pick up on its own is which
-binary runs, and Settings → OpenChamber → OpenCode CLI owns that restart.
+MCP servers and plugins by itself, announcing each rebuilt slice
+(`config.updated`, `agent.updated`, `command.updated`, `skill.updated`,
+`plugin.updated`, `credential.*`). `events.ts` translates all of them into one
+`catalog.updated` sync event carrying a `kind`, and `reloadCatalog` re-reads
+that slice. Nothing in the UI asks the user to apply or restart anything: the
+only setting OpenCode cannot pick up on its own is which binary runs, and
+Settings → OpenChamber → OpenCode CLI owns that restart.
 
-A `config` rebuild first clears the client's config cache, otherwise the
-refresh would be answered from the copy cached seconds earlier.
+One saved file produces a burst of events, so the kinds are collected and
+re-read once the burst settles (250 ms). A `config` rebuild first clears the
+client's config cache, otherwise the refresh would be answered from the copy
+cached seconds earlier. A re-read that returns an identical list keeps the
+objects already in the stores, so nothing re-renders.
+
+**The model list has no event of its own.** OpenCode's `catalog.updated`
+fires dozens of times while a reply streams and is being removed upstream, so
+`events.ts` ignores it. The provider/model list is re-read on the two things
+that change it: a credential change (a login or logout) and a config change (a
+provider declared in `opencode.json`). After a credential change the Settings
+and composer stores read it twice, the second time
+`PROVIDER_REREAD_AFTER_CREDENTIAL_MS` later, because provider plugins that
+fetch their models after a login (Copilot, LM Studio) finish after the first
+read.
 
 | Kind | Sync child stores | Settings/composer stores (`stores/catalogRefresh.ts`) |
 |---|---|---|
@@ -87,8 +95,8 @@ refresh would be answered from the copy cached seconds earlier.
 | `command` | `command` per directory | commands store |
 | `skill` | — | skills store + skills catalog |
 | `plugin` | — | plugins store |
-| `config` | `config` per directory (plus `emitSyncConfigChanged`) | agents, commands, skills, MCP config, plugins |
-| `provider` / `model` / `credential` | `provider` per directory | config-store providers (model-metadata cache invalidated; the current list stays until the new one lands) |
+| `config` | `config` and `provider` per directory (plus `emitSyncConfigChanged`) | agents, commands, skills, MCP config, plugins, config-store providers |
+| `provider` / `credential` | `provider` per directory | config-store providers (model-metadata cache invalidated; the current list stays until the new one lands; `credential` reads twice) |
 | `project` | global project list | — |
 
 ## Session list rules

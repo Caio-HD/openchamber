@@ -251,7 +251,6 @@ describe("translateWireEvent", () => {
       [{ ...base, type: "command.updated", data: {} }, "command"],
       [{ ...base, type: "skill.updated", data: {} }, "skill"],
       [{ ...base, type: "plugin.updated", data: {} }, "plugin"],
-      [{ ...base, type: "catalog.updated", data: {} }, "model"],
       [{ ...base, type: "credential.updated", data: {} }, "credential"],
       [{ ...base, type: "credential.switched", data: { integrationID: "openai", credentialID: null } }, "credential"],
       [
@@ -262,6 +261,12 @@ describe("translateWireEvent", () => {
     for (const [event, kind] of kinds) {
       expect(translateWireEvent(event)).toEqual([{ type: "catalog.updated", properties: { kind } }])
     }
+  })
+
+  test("OpenCode's own catalog.updated is not a refresh signal", () => {
+    // It fires dozens of times while a reply streams and is being removed
+    // upstream; the model list is re-read on credential and config changes.
+    expect(translateWireEvent({ ...base, type: "catalog.updated", data: {} })).toEqual([])
   })
 
   test("mcp status changes stay their own event", () => {

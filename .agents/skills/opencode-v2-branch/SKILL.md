@@ -25,8 +25,7 @@ a decision for the maintainer — never quietly handed to a v2 default.
 - Known upstream gaps and open reports: the maintainer's questions in the
   OpenCode Slack thread and issue
   https://github.com/anomalyco/opencode/issues/48872 (`catalog.updated`
-  storm during streaming; OpenChamber rate-limits and de-duplicates catalog
-  re-reads in `packages/ui/src/sync/catalog-reload.ts` as a workaround).
+  storm during streaming; OpenChamber no longer listens to that event).
 
 ## "What's new in OpenCode v2?"
 
@@ -47,8 +46,14 @@ between the pinned tag and the newest tag is classified.
      workaround that can go and what changes for the user if it goes.
    - **closes an open gap** — something from the Slack thread or the
      v1→v2 audit that v2 could not do before (session metadata PATCH,
-     credentials over HTTP, MCP OAuth from a client, `/api/generate` on the
-     free tier, catalog event storm).
+     credentials over HTTP, `/api/generate` on the free tier).
+   - **`catalog.updated`** is ignored by OpenChamber already (it stormed
+     during streaming and Dax is removing it, 2026-09-14); the model list is
+     re-read on `credential.*` and `config.updated`, twice after a credential
+     change (`stores/catalogRefresh.ts`). If a newer tag adds a real
+     model-list event, adopt it there. MCP OAuth is not a gap: remote servers
+     are `mcp_*` integrations with the same connect/status/complete flow
+     (`mcp/McpOAuthSignIn.tsx`).
    - **neutral** — TUI, their app, internal refactors.
 4. Report in that order, plain words, with the maintainer's decision points
    explicit: what to remove, what to adopt, what still to ask upstream.
