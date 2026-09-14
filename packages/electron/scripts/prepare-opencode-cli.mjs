@@ -98,7 +98,10 @@ const extractArchive = (archivePath, destination) => {
   fs.rmSync(destination, { recursive: true, force: true });
   fs.mkdirSync(destination, { recursive: true });
   // npm tarballs are gzipped tar on every platform; Windows 10+ ships bsdtar.
-  run('tar', ['-xzf', archivePath, '-C', destination]);
+  // The archive is addressed relative to the destination: under Git Bash on
+  // Windows, `tar` is GNU tar, which reads an absolute `D:\...` path as a
+  // remote host ("Cannot connect to D:").
+  run('tar', ['-xzf', path.relative(destination, archivePath)], { cwd: destination });
 };
 
 const findBinary = (root, binaryName) => {
