@@ -53,6 +53,7 @@ const PluginPane = React.lazy(() => import('./PluginPane').then((module) => ({ d
 import { useGuestsStore } from '@/lib/guests/store';
 import { isPluginContextPanelMode, pluginIdFromMode } from '@/lib/surfaces/modes';
 import { getContextSurfaceWidthFraction } from '@/lib/surfaces/registry';
+import { isVimEditorEventTarget } from '@/lib/editorFocus';
 import { isTerminalEventTarget } from '@/lib/terminalFocus';
 
 const CONTEXT_PANEL_MIN_WIDTH = 320;
@@ -705,6 +706,11 @@ export const ContextPanel: React.FC = () => {
     // The terminal input listens in the bubble phase; stopping capture here
     // would swallow the key before the terminal ever sees it (issue #2644).
     if (isTerminalEventTarget(event.target)) {
+      return;
+    }
+    // Same for the file editor on the Vim keymap: Escape leaves INSERT mode
+    // there, and CodeMirror only sees it if this handler stays out of the way.
+    if (isVimEditorEventTarget(event.target)) {
       return;
     }
 
