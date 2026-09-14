@@ -73,16 +73,16 @@ gh workflow run v2-preview-desktop.yml --ref opencode-v2-refactoring -R opencham
 gh run list -R openchamber/openchamber --workflow v2-preview-desktop.yml --limit 3
 ```
 
-It builds signed, notarized macOS apps (arm64 and Intel) from the branch,
-stamps them `2.0.0-preview.<run number>`, and replaces this platform's files
-on the `v2-preview` pre-release:
+It builds the desktop apps from the branch (macOS arm64 and Intel, signed
+and notarized; Windows x64 and arm64; Linux AppImage x64 and arm64), stamps
+them `2.0.0-preview.<run number>`, and replaces each target's files on the
+`v2-preview` pre-release:
 https://github.com/openchamber/openchamber/releases/tag/v2-preview.
 The version is stamped in the workflow only; the repo stays on the stable
 version. A pre-release is never "latest", so stable installs and the website
 ignore it; the preview app keeps checking for updates (that is where install
 statistics come from) and never downgrades, since `2.0.0-preview.*` sorts
-above any `1.x`. Windows and Linux are not built; copying the matching job
-from `release.yml` adds them.
+above any `1.x`. The jobs mirror `release.yml` minus update manifests.
 
 ## Keeping the branch alive
 

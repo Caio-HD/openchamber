@@ -1,6 +1,6 @@
 # Temporary: hand-built desktop previews of the OpenCode v2 branch for testers.
 #
-# Every run rebuilds the macOS apps from the chosen ref, stamps them as
+# Every run rebuilds the desktop apps (macOS, Windows, Linux) from the chosen ref, stamps them as
 # 2.0.0-preview.<run number>, and replaces the files on the `v2-preview`
 # pre-release. A pre-release is never "latest", so the in-app updater and the
 # website keep pointing at the stable release, while the preview app itself
@@ -191,6 +191,198 @@ jobs:
           done
           files=()
           for file in packages/electron/dist/*.dmg packages/electron/dist/*.zip; do
+            [ -f "$file" ] && files+=("$file")
+          done
+          gh release upload "$PREVIEW_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+  build-windows:
+    name: Windows ${{ matrix.arch }}
+    needs: prepare-release
+    # windows-latest resolves to Visual Studio 18, which this electron/node-gyp
+    # stack does not detect correctly (same pin as release.yml).
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+          - arch: arm64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Stamp the preview version
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          for file in packages/electron/package.json packages/web/package.json; do
+            node -e '
+              const fs = require("fs");
+              const [file, version] = process.argv.slice(1);
+              const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+              pkg.version = version;
+              fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+            ' "$file" "$VERSION"
+          done
+
+      - name: Get bundled OpenCode CLI version
+        id: opencode_cli_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/electron/package.json').opencodeCli.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache bundled OpenCode CLI artifact
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: packages/electron/.cache/opencode-cli
+          key: opencode-cli-${{ runner.os }}-${{ matrix.arch }}-${{ steps.opencode_cli_version.outputs.version }}
+          restore-keys: |
+            opencode-cli-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Build Windows app
+        working-directory: packages/electron
+        shell: bash
+        env:
+          # Cross-compile for the arm64 target from the x64 runner.
+          ELECTRON_BUILDER_ARCH: ${{ matrix.arch }}
+        run: |
+          bun run build:web-assets
+          bun run prepare:opencode-cli
+          bun run verify:opencode-cli
+          bun run bundle:main
+          node ./scripts/rebuild-native.mjs
+          node ./scripts/package.mjs --win --${{ matrix.arch }} --publish=never
+          bun run verify:opencode-cli:packaged
+
+      - name: Replace this platform's files on the pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DROP_PATTERN: "*-${{ matrix.arch }}.exe"
+        run: |
+          set -euo pipefail
+          # Older builds carry other build numbers in their names, so --clobber
+          # alone would leave them behind: drop every file for this target first.
+          for asset in $(gh release view "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); do
+            # shellcheck disable=SC2254
+            case "$asset" in
+              $DROP_PATTERN) gh release delete-asset "$PREVIEW_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes ;;
+            esac
+          done
+          files=()
+          for file in packages/electron/dist/*.exe; do
+            [ -f "$file" ] && files+=("$file")
+          done
+          gh release upload "$PREVIEW_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+  build-linux:
+    name: Linux ${{ matrix.arch }}
+    needs: prepare-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            artifact_arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            artifact_arch: arm64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Stamp the preview version
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          for file in packages/electron/package.json packages/web/package.json; do
+            node -e '
+              const fs = require("fs");
+              const [file, version] = process.argv.slice(1);
+              const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+              pkg.version = version;
+              fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+            ' "$file" "$VERSION"
+          done
+
+      - name: Get bundled OpenCode CLI version
+        id: opencode_cli_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./packages/electron/package.json').opencodeCli.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache bundled OpenCode CLI artifact
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: packages/electron/.cache/opencode-cli
+          key: opencode-cli-${{ runner.os }}-${{ matrix.arch }}-${{ steps.opencode_cli_version.outputs.version }}
+          restore-keys: |
+            opencode-cli-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Build and package Linux AppImage
+        working-directory: packages/electron
+        env:
+          OPENCHAMBER_TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          bun run build:web-assets
+          bun run prepare:opencode-cli
+          bun run verify:opencode-cli
+          bun run bundle:main
+          bun run rebuild:native
+          node ./scripts/package.mjs --linux --${{ matrix.arch }} --publish=never
+          bun run verify:opencode-cli:packaged
+          bun run verify:linux-appimage
+
+      - name: Replace this platform's files on the pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DROP_PATTERN: "*-linux-${{ matrix.artifact_arch }}.AppImage"
+        run: |
+          set -euo pipefail
+          # Older builds carry other build numbers in their names, so --clobber
+          # alone would leave them behind: drop every file for this target first.
+          for asset in $(gh release view "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); do
+            # shellcheck disable=SC2254
+            case "$asset" in
+              $DROP_PATTERN) gh release delete-asset "$PREVIEW_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes ;;
+            esac
+          done
+          files=()
+          for file in packages/electron/dist/*.AppImage; do
             [ -f "$file" ] && files+=("$file")
           done
           gh release upload "$PREVIEW_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
