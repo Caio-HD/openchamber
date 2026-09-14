@@ -175,6 +175,17 @@ jobs:
             --version "$VERSION_NAME" \
             --build "$BUILD_NUMBER"
 
+      - name: Upload to Google Play Console (Internal Track)
+        if: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON != '' }}
+        uses: rstudio/google-play-track-action@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
+          packageName: com.openchamber.app
+          aabFile: packages/mobile/android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
+
   ios-beta:
     name: Build & Upload iOS TestFlight
     needs: resolve-version

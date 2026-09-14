@@ -184,6 +184,17 @@ jobs:
           gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
         working-directory: ${{ env.ANDROID_PROJECT_DIR }}
 
+      - name: Upload to Google Play Console (Production / Release Track)
+        if: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON != '' }}
+        uses: rstudio/google-play-track-action@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
+          packageName: com.openchamber.app
+          aabFile: packages/mobile/android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
+
   ios-testflight:
     name: iOS TestFlight upload
     if: inputs.build_ios
