@@ -142,6 +142,39 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
           <InstanceServiceUrls />
         </div>
 
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-border/40 bg-[var(--surface-elevated)]/50 p-4 text-center">
+          <span className={SETTINGS_FIELD_LABEL_CLASS}>Update Channel</span>
+          <span className="typography-meta text-muted-foreground">
+            Choose Stable for official releases or Beta for pre-release builds
+          </span>
+          <div className="mt-2 flex items-center gap-1 rounded-lg border border-border/50 bg-background/50 p-1">
+            <Button
+              type="button"
+              size="sm"
+              variant={updateChannel === 'stable' ? 'secondary' : 'ghost'}
+              className="h-8 px-4 text-xs font-medium"
+              onClick={() => {
+                setUpdateChannel('stable');
+                void updateStore.checkForUpdates();
+              }}
+            >
+              Stable
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={updateChannel === 'beta' ? 'secondary' : 'ghost'}
+              className="h-8 px-4 text-xs font-medium"
+              onClick={() => {
+                setUpdateChannel('beta');
+                void updateStore.checkForUpdates();
+              }}
+            >
+              Beta
+            </Button>
+          </div>
+        </div>
+
         <div className="flex justify-center">
           {!updateStore.available && !updateStore.error && (
             <Button
