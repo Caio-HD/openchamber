@@ -179,15 +179,14 @@ const reply = (id: string, total: number): ContextFillMessage => ({
   id,
   role: "assistant",
   tokens: { total, input: total, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-  time: { created: 1, completed: 2 },
 })
 
 const compaction = (id: string, overrides: Partial<ContextFillMessage> = {}): ContextFillMessage => ({
   id,
   role: "assistant",
   summary: true,
+  finish: "stop",
   tokens: { total: 81_605, input: 79_395, output: 1_694, reasoning: 0, cache: { read: 0, write: 0 } },
-  time: { created: 3, completed: 4 },
   ...overrides,
 })
 
@@ -203,17 +202,23 @@ describe("findLatestContextFill", () => {
   })
 
   test("a response that is still streaming after the compaction keeps the fill unknown", () => {
-    const streaming: ContextFillMessage = { id: "next", role: "assistant", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 5 } }
+    const streaming: ContextFillMessage = { id: "next", role: "assistant", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
     expect(findLatestContextFill([reply("before", 100), compaction("summary"), streaming])).toEqual({ state: "compacted", index: 1 })
   })
 
   test("a compaction still running leaves the previous reading in place", () => {
-    const running = compaction("summary", { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 3 } })
+    const running = compaction("summary", { finish: undefined, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
     expect(findLatestContextFill([reply("before", 100), running])).toEqual({ state: "measured", index: 0, totalTokens: 100 })
   })
 
+  test("an overflowing compaction that is completed but not yet marked failed keeps the previous reading", () => {
+    // OpenCode writes time.completed before it records the overflow error and finish: "error".
+    const overflowing = compaction("summary", { finish: undefined })
+    expect(findLatestContextFill([reply("before", 100), overflowing])).toEqual({ state: "measured", index: 0, totalTokens: 100 })
+  })
+
   test("a failed compaction did not change the window, so the previous reading stands", () => {
-    const failed = compaction("summary", { error: { name: "MessageAbortedError", data: { message: "aborted" } } })
+    const failed = compaction("summary", { finish: "error", error: { name: "MessageAbortedError", data: { message: "aborted" } } })
     expect(findLatestContextFill([reply("before", 100), failed])).toEqual({ state: "measured", index: 0, totalTokens: 100 })
   })
 

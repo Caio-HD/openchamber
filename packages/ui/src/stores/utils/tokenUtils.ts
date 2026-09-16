@@ -58,8 +58,8 @@ export type ContextFillMessage = {
     tokens?: TokenBreakdown;
     /** `true` on the assistant record of a compaction. User messages carry their diff summary here. */
     summary?: AssistantMessage['summary'] | UserMessage['summary'];
+    finish?: AssistantMessage['finish'];
     error?: AssistantMessage['error'];
-    time?: { created?: number; completed?: number };
 };
 
 type LatestContextFill =
@@ -77,6 +77,10 @@ type LatestContextFill =
  * finished compaction yields `compacted` instead of falling back to an older,
  * pre-compaction response. A compaction still running or one that failed has
  * not changed the window, so it is skipped and the previous reading stands.
+ * "Finished" is OpenCode's own rule for a completed compaction
+ * (`summary && finish && !error`): an overflowing compaction request gets
+ * `time.completed` before its `error`, so the timestamp alone would briefly
+ * report a failed compaction as done.
  */
 export const findLatestContextFill = (messages: readonly ContextFillMessage[]): LatestContextFill | null => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -84,7 +88,7 @@ export const findLatestContextFill = (messages: readonly ContextFillMessage[]): 
         if (message?.role !== 'assistant') continue;
 
         if (message.summary === true) {
-            const finished = message.time?.completed !== undefined && !message.error;
+            const finished = Boolean(message.finish) && !message.error;
             if (finished) return { state: 'compacted', index };
             continue;
         }

@@ -95,7 +95,7 @@ describe('computeContextUsage', () => {
       [
         assistant({ total: 11_837, input: 138, output: 691, reasoning: 0, cache: { read: 11_008, write: 0 } }, 'reply'),
         { id: 'compact-request', role: 'user' },
-        { ...assistant({ total: 2_392, input: 1_481, output: 911, reasoning: 0 }, 'summary'), summary: true, time: { created: 1, completed: 2 } },
+        { ...assistant({ total: 2_392, input: 1_481, output: 911, reasoning: 0 }, 'summary'), summary: true, finish: 'stop' },
       ],
       200_000,
     );
@@ -105,7 +105,7 @@ describe('computeContextUsage', () => {
   test('measures again once a response after the compaction reports tokens', () => {
     const usage = computeContextUsage(
       [
-        { ...assistant({ total: 2_392, input: 1_481, output: 911 }, 'summary'), summary: true, time: { created: 1, completed: 2 } },
+        { ...assistant({ total: 2_392, input: 1_481, output: 911 }, 'summary'), summary: true, finish: 'stop' },
         assistant({ total: 12_100, input: 12_000, output: 100 }, 'next'),
       ],
       200_000,
