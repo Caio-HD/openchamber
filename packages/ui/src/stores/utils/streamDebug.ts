@@ -72,7 +72,7 @@ let streamPerfMemoryDebugEnabled = false;
 const isStreamPerfEnabled = (): boolean => streamPerfProfileEnabled || streamPerfMemoryDebugEnabled;
 
 const clearStreamPerfStateIfDisabled = (): void => {
-    if (isStreamPerfEnabled() || typeof window === 'undefined') {
+    if (isStreamPerfEnabled() || !globalThis.window) {
         return;
     }
 
