@@ -378,7 +378,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const modelDirectories = React.useMemo(() => [...new Set(orderedSectionsForRender.flatMap((section) => (
     section.groups.flatMap((group) => getSessionFolderScopes(group).map((scope) => normalizePath(scope.directory)).filter((directory): directory is string => Boolean(directory)))
   )))], [orderedSectionsForRender]);
-  React.useSyncExternalStore(
+  const bootstrapSnapshot = React.useSyncExternalStore(
     React.useCallback((notify) => modelDirectories.length > 0 ? childStores.subscribeBootstrap(notify) : () => undefined, [childStores, modelDirectories.length]),
     React.useCallback(() => modelDirectories.map((directory) => (
       `${directory}\u0000${childStores.getBootstrapState(directory) ?? ''}\u0000${childStores.getBootstrapFailure(directory) ?? ''}\u0000${childStores.getInitializationState(directory) ?? ''}\u0000${childStores.getInitializationFailure(directory) ?? ''}`
@@ -472,8 +472,10 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     scrollerActions.setActiveProjectIdOnly,
     scrollerActions.setSessionSwitcherOpen,
   ]);
-  const groupStatusByKey = React.useMemo(() => {
-    const statuses = new Map<string, SessionSidebarGroupStatus>();
+  const { groupStatusByKey, folderAuthorityByOwner } = React.useMemo(() => {
+    // The snapshot is the invalidation token; childStores owns the structured state read below.
+    void bootstrapSnapshot;
+    const nextGroupStatusByKey = new Map<string, SessionSidebarGroupStatus>();
     for (const section of orderedSectionsForRender) {
       for (const group of section.groups) {
         const directories = getSessionFolderScopes(group).map((scope) => normalizePath(scope.directory)).filter((directory): directory is string => Boolean(directory));
@@ -482,7 +484,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
         if (failedDirectory) {
           const listFailed = childStores.getBootstrapState(failedDirectory) === 'failed';
           const failure = listFailed ? childStores.getBootstrapFailure(failedDirectory) : childStores.getInitializationFailure(failedDirectory);
-          statuses.set(groupKey, {
+          nextGroupStatusByKey.set(groupKey, {
             state: failure === 'os-permission' ? 'permission-denied' : listFailed ? 'load-failed' : 'initialization-failed',
             directory: failedDirectory,
             canGrantAccess: failure === 'os-permission' && canRequestNativeDirectoryAccess(),
@@ -491,36 +493,33 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
           const state = childStores.getBootstrapState(directory);
           return state === 'queued' || state === 'running';
         })) {
-          statuses.set(groupKey, { state: 'loading', directory: directories[0] ?? null, canGrantAccess: false });
+          nextGroupStatusByKey.set(groupKey, { state: 'loading', directory: directories[0] ?? null, canGrantAccess: false });
         } else {
-          statuses.set(groupKey, { state: 'ready', directory: directories[0] ?? null, canGrantAccess: false });
+          nextGroupStatusByKey.set(groupKey, { state: 'ready', directory: directories[0] ?? null, canGrantAccess: false });
         }
       }
     }
-    return statuses;
-  }, [childStores, orderedSectionsForRender]);
-  const folderAuthorityByOwner = React.useMemo(() => {
-    const authority = new Map<string, { scopeKeys: readonly string[]; complete: boolean }>();
+    const nextFolderAuthorityByOwner = new Map<string, { scopeKeys: readonly string[]; complete: boolean }>();
     for (const section of orderedSectionsForRender) {
       for (const group of section.groups) {
         const ownerKey = getSessionFolderOwnerKey(section.project.id, group.directory);
         if (!ownerKey) continue;
         const scopes = getSessionFolderScopes(group);
-        const current = authority.get(ownerKey);
+        const current = nextFolderAuthorityByOwner.get(ownerKey);
         const scopeKeys = [...new Set([...(current?.scopeKeys ?? []), ...scopes.map((scope) => scope.scopeKey)])];
         const complete = collection.hasAuthoritativeGlobalSessions && scopes.every((scope) => {
           const directory = normalizePath(scope.directory);
           return !directory || childStores.getBootstrapState(directory) === 'complete';
         });
-        authority.set(ownerKey, { scopeKeys, complete: (current?.complete ?? true) && complete });
+        nextFolderAuthorityByOwner.set(ownerKey, { scopeKeys, complete: (current?.complete ?? true) && complete });
       }
     }
     if (chatGroup) {
       const ownerKey = getSessionFolderOwnerKey(null, chatGroup.directory);
-      if (ownerKey) authority.set(ownerKey, { scopeKeys: getSessionFolderScopes(chatGroup).map((scope) => scope.scopeKey), complete: collection.hasAuthoritativeGlobalSessions });
+      if (ownerKey) nextFolderAuthorityByOwner.set(ownerKey, { scopeKeys: getSessionFolderScopes(chatGroup).map((scope) => scope.scopeKey), complete: collection.hasAuthoritativeGlobalSessions });
     }
-    return authority;
-  }, [chatGroup, childStores, collection.hasAuthoritativeGlobalSessions, orderedSectionsForRender]);
+    return { groupStatusByKey: nextGroupStatusByKey, folderAuthorityByOwner: nextFolderAuthorityByOwner };
+  }, [bootstrapSnapshot, chatGroup, childStores, collection.hasAuthoritativeGlobalSessions, orderedSectionsForRender]);
   const visibleCountByContainer = React.useMemo(() => new Map([
     ...visibleSessionCountByGroup,
     ...visibleActivityCountByKey,
