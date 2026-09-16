@@ -1,6 +1,5 @@
 import React from 'react';
 import { useUpdateStore } from '@/stores/useUpdateStore';
-import { useUIStore } from '@/stores/useUIStore';
 import { useShallow } from 'zustand/react/shallow';
 import { UpdateDialog } from '@/components/ui/UpdateDialog';
 import { useDeviceInfo } from '@/lib/device';
