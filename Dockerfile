@@ -12,10 +12,6 @@ COPY packages/electron/package.json ./packages/electron/
 COPY packages/vscode/package.json ./packages/vscode/
 COPY packages/mobile/package.json ./packages/mobile/
 COPY packages/sdk/package.json ./packages/sdk/
-# `packages/sdk/examples/*` are workspaces too, and a frozen install fails
-# when a workspace is missing. Copy the directory rather than each manifest
-# so a new example does not silently break the image build.
-COPY packages/sdk/examples ./packages/sdk/examples
 RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM deps AS builder
