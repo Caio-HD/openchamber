@@ -17,6 +17,7 @@ import { SessionSwitcherDropdown } from '@/components/session/SessionSwitcherDro
 import { SessionsTabTitle } from '@/components/session/SessionsTabTitle';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
+import { getVSCodeBootstrapWorkspaceFolder } from '@/lib/vscodeBootstrap';
 import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
@@ -98,6 +99,10 @@ export const VSCodeLayout: React.FC = () => {
       return configured.trim();
     }
     return null;
+  }, []);
+
+  const bootstrapWorkspaceFolder = React.useMemo<string | null>(() => {
+    return getVSCodeBootstrapWorkspaceFolder();
   }, []);
 
   const hasAppliedInitialSession = React.useRef(false);
@@ -449,7 +454,7 @@ export const VSCodeLayout: React.FC = () => {
     // No initialSessionId means open a new session draft
     if (!initialSessionId) {
       hasAppliedInitialSession.current = true;
-      openNewSessionDraft({ automatic: true });
+      openNewSessionDraft({ automatic: true, directoryOverride: bootstrapWorkspaceFolder });
       return;
     }
 
@@ -459,7 +464,7 @@ export const VSCodeLayout: React.FC = () => {
 
     hasAppliedInitialSession.current = true;
     void useSessionUIStore.getState().setCurrentSession(initialSessionId);
-  }, [connectionStatus, hasInitializedOnce, initialSessionExists, initialSessionId, openNewSessionDraft, viewMode]);
+  }, [bootstrapWorkspaceFolder, connectionStatus, hasInitializedOnce, initialSessionExists, initialSessionId, openNewSessionDraft, viewMode]);
 
   // Track container width for responsive settings layout
   React.useEffect(() => {
@@ -829,7 +834,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       {showBack && onBack && (
         <button
           onClick={onBack}
-          className="inline-flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="inline-flex h-7 w-7 items-center justify-center text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t('vscodeLayout.actions.backToSessionsAria')}
         >
           <Icon name="arrow-left" className="h-5 w-5" />
@@ -854,7 +859,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
           type="button"
           onClick={toggleArchivedSessions}
           className={cn(
-            'inline-flex h-8 w-8 items-center justify-center p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+            'inline-flex h-8 w-8 items-center justify-center p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             showArchivedSessions ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
           )}
           aria-label={t('sessions.sidebar.header.displayMode.showArchived')}
@@ -868,7 +873,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       {onNewSession && (
         <button
           onClick={onNewSession}
-          className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t('vscodeLayout.actions.newSessionAria')}
         >
           <Icon name="add" className="h-5 w-5" />
@@ -877,7 +882,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       {onAgentManager && (
         <button
           onClick={onAgentManager}
-          className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t('vscodeLayout.actions.openAgentManagerAria')}
         >
           <Icon name="robot-2" className="h-5 w-5" />
@@ -885,7 +890,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       )}
       {showMcp && (
         <McpDropdown
-          headerIconButtonClass="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          headerIconButtonClass="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
       )}
       {showRateLimits && (
@@ -900,7 +905,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
             <button
               type="button"
               aria-label={t('vscodeLayout.quota.actions.rateLimitsAria')}
-              className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               disabled={isQuotaLoading}
             >
               <Icon name="timer" className="h-5 w-5" />
@@ -946,7 +951,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
                   </div>
                   <button
                     type="button"
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => fetchAllQuotas()}
                     disabled={isQuotaLoading}
                     aria-label={t('vscodeLayout.quota.actions.refreshAria')}
@@ -1021,7 +1026,7 @@ const VSCodeHeader: React.FC<VSCodeHeaderProps> = ({ title, showBack, onBack, on
       {onSettings && (
         <button
           onClick={onSettings}
-          className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="inline-flex h-9 w-9 items-center justify-center p-2 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t('vscodeLayout.actions.settingsAria')}
         >
           <Icon name="settings-3" className="h-5 w-5" />

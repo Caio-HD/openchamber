@@ -253,7 +253,7 @@ const QuickSessionAction = React.memo(function QuickSessionAction({
         <button
           type="button"
           className={cn(
-            'inline-flex items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-opacity',
+            'inline-flex items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-opacity',
             shiftHeld
               ? 'text-destructive hover:text-destructive'
               : 'text-muted-foreground hover:text-foreground',
@@ -829,7 +829,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       }}
       style={{ minWidth: 14, minHeight: 14, left: ROW_GUTTER_LEFT_PX + depth * ROW_DEPTH_STEP_PX }}
       className={cn(
-        'absolute top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-opacity',
+        'absolute top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-opacity',
         hideChevronUntilHover
           ? 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto'
           : '',
@@ -1447,10 +1447,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 style={{ paddingLeft: ROW_TEXT_LEFT_PX + depth * ROW_DEPTH_STEP_PX }}
                 className={cn(
                   'group relative my-0.5 flex cursor-pointer items-center rounded-md py-1 pr-1.5',
-                  // Active (currently open) session gets a subtle primary tint;
-                  // multi-select highlight takes precedence when both apply.
-                  isActive && !isRowSelected && 'bg-primary/10',
-                  isRowSelected && 'bg-interactive-selection',
+                  (isActive || isRowSelected) && 'bg-interactive-selection text-interactive-selection-foreground',
+                  isRowSelected && 'ring-1 ring-inset ring-border',
                 )}
               />
             }
@@ -1474,7 +1472,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                       handleSessionDoubleClick(session.id, sessionTitle);
                     }}
                     className={cn(
-	                      'flex min-w-0 flex-1 cursor-pointer flex-col gap-0 overflow-hidden text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 text-foreground select-none transition-[padding]',
+                      'flex min-w-0 flex-1 cursor-pointer flex-col gap-0 overflow-hidden text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring text-foreground select-none transition-[padding]',
 	                      isTouchPressed && 'bg-interactive-hover/70',
                       alwaysShowActions
                         ? (isVSCode ? revealPaddingClass : alwaysActionPaddingClass)
@@ -1485,7 +1483,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                       {/* Unread emphasis is color-only: a font-weight change
                           would reflow the truncated title and cause a micro
                           horizontal shift when the status flips. */}
-                      <div className={cn('block min-w-0 flex-1 truncate typography-ui-label font-normal', isActive ? 'text-primary' : needsAttention ? 'text-foreground' : 'text-foreground/80')}>{renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}</div>
+                      <div className={cn('block min-w-0 flex-1 truncate typography-ui-label font-normal', isActive || isRowSelected ? 'text-interactive-selection-foreground' : needsAttention ? 'text-foreground' : 'text-foreground/80')}>{renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}</div>
                       {!archivedBucket && sessionDirectory && (renderContext === 'recent'
                         || (sessionGroupingMode === 'flat' && node.worktree
                           && normalizePath(node.worktree.path) !== normalizePath(node.worktree.projectDirectory))) ? (
@@ -1648,7 +1646,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                   <button
                     type="button"
                     className={cn(
-                      'inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-opacity',
+                      'inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-opacity',
                       !alwaysShowActions ? 'h-4 w-4' : 'h-6 w-6',
                     )}
                     aria-label={t('sessions.sidebar.session.actions.openInEditor')}
@@ -1670,7 +1668,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 <button
                   type="button"
                   className={cn(
-                    'inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 transition-opacity',
+                    'inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-opacity',
                     !alwaysShowActions
                       ? (isSessionMenuOpen
                           ? 'h-4 w-4 opacity-100'

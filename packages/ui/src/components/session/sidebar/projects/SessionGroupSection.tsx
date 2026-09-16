@@ -1065,7 +1065,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                       mode: 'session',
                     });
                   }}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={t('sessions.sidebar.group.actions.deleteArchivedInGroupAria', { label: group.label })}
                 >
                   <Icon name="delete-bin" className="h-4 w-4" />
@@ -1089,7 +1089,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                       worktree: group.worktree,
                     });
                   }}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={t('sessions.sidebar.group.actions.deleteGroupAria', { label: group.label })}
                 >
                   <Icon name="delete-bin" className="h-4 w-4" />
@@ -1111,7 +1111,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                     if (mobileVariant) setSessionSwitcherOpen(false);
                     openNewSessionDraft({ selectedProjectId: projectId, directoryOverride: group.directory });
                   }}
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-interactive-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={t('sessions.sidebar.group.actions.newDraftInGroupAria', { label: group.label })}
                  >
                    <Icon name="add" className="h-4 w-4" />
