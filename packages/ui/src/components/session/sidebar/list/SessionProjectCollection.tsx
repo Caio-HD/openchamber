@@ -17,8 +17,7 @@ import { createSessionOwnershipIndex } from '../sessions/sessionOwnership';
 import { useProjectSessionLists } from '../projects/useProjectSessionLists';
 import { useSessionSidebarSections } from '../projects/useSessionSidebarSections';
 import { SessionPrefetchEffect } from './useSessionPrefetch';
-import { normalizePath } from '../utils';
-import { formatProjectLabel } from '../utils';
+import { formatProjectLabel, normalizePath } from '../utils';
 import type { SessionGroup } from '../types';
 import { SessionProjectScroller } from '../projects/SessionProjectScroller';
 import { useSessionGrouping } from '../projects/useSessionGrouping';
@@ -230,7 +229,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     () => chatGroup ? [chatGroup] : EMPTY_STANDALONE_GROUPS,
     [chatGroup],
   );
-  const { projectSections, groupSearchDataByGroup, sectionsForRender, flatSectionsForRender, searchMatchCount } = useSessionSidebarSections({
+  const { projectSections, groupSearchDataByGroup, sectionsForRender, flatSectionsForRender } = useSessionSidebarSections({
     normalizedProjects: topology.projects,
     getSessionsForProject,
     getArchivedSessionsForProject,
@@ -248,7 +247,6 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     standaloneGroups,
   });
 
-  void searchMatchCount;
   const onSearchMatchCountChange = view.onSearchMatchCountChange;
   // Unmounting means nothing is listed any more, so the header must not keep
   // showing the last count it was told about.
@@ -557,9 +555,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     rowModel: sidebarRowModel,
     sectionsForRender: orderedSectionsForRender,
     projectSections,
-    activeProjectId: view.activeProjectId,
     singleProjectMode,
-    singleProjectId: selectedSingleProjectId,
     emptyState: view.emptyState,
     searchEmptyState: view.searchEmptyState,
     projectRepoStatus: topology.projectRepoStatus,
@@ -582,38 +578,28 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     orderedSectionsForRender,
     sidebarRowModel,
     topology.projectRepoStatus,
-    view.activeProjectId,
     view.emptyState,
     view.searchEmptyState,
     visibleSessionCountByGroup,
     visibleActivityCountByKey,
     collapsedActivityKeys,
     singleProjectMode,
-    selectedSingleProjectId,
   ]);
   const scrollerView = React.useMemo(() => ({
     homeDirectory: view.homeDirectory,
-    collapsedProjects: projectView.collapsedProjects,
-    showOnlyMainWorkspace: view.showOnlyMainWorkspace,
     hasSessionSearchQuery: view.hasSessionSearchQuery,
-    normalizedSessionSearchQuery: view.normalizedSessionSearchQuery,
     hideDirectoryControls: view.hideDirectoryControls,
-    isDesktopShellRuntime: view.isDesktopShellRuntime,
     stickyZoneHeaders: view.stickyZoneHeaders,
     mobileVariant: view.mobileVariant,
     alwaysShowActions,
     projectSortOrder: view.projectSortOrder,
   }), [
-    projectView.collapsedProjects,
     view.homeDirectory,
     view.hasSessionSearchQuery,
     view.hideDirectoryControls,
-    view.isDesktopShellRuntime,
     view.mobileVariant,
     alwaysShowActions,
-    view.normalizedSessionSearchQuery,
     view.projectSortOrder,
-    view.showOnlyMainWorkspace,
     view.stickyZoneHeaders,
   ]);
   const scrollerActionSet = React.useMemo(() => ({

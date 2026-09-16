@@ -40,8 +40,9 @@ export function SessionSidebarRows({
     rangeExtractor,
   });
   const virtualItems = virtualizer.getVirtualItems();
+  const totalSize = scrollElement ? virtualizer.getTotalSize() : 0;
   const maximumScrollOffset = scrollElement
-    ? Math.max(virtualizer.getTotalSize() - scrollElement.clientHeight, 0)
+    ? Math.max(totalSize - scrollElement.clientHeight, 0)
     : 0;
   const scrollOffset = scrollElement
     ? Math.min(scrollElement.scrollTop, maximumScrollOffset)
@@ -57,20 +58,21 @@ export function SessionSidebarRows({
     const estimatedTotal = rows.reduce((total, row) => total + row.estimateSize, 0);
     return <div data-sidebar-virtual-pending="true">
       {indexes.map((index) => {
-        const row = model.rows[index];
+        const row = rows[index];
         return row ? <div key={row.key}>{renderRow(row, index)}</div> : null;
       })}
       {estimatedTotal > renderedHeight ? <div aria-hidden="true" style={{ height: estimatedTotal - renderedHeight }} /> : null}
     </div>;
   }
 
-  return <div data-sidebar-virtual-ready="true" style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+  return <div data-sidebar-virtual-ready="true" style={{ height: totalSize, position: 'relative' }}>
     {virtualItems.map((item) => {
-        const row = rows[item.index];
+      const row = rows[item.index];
       if (!row) return null;
       return <div
         key={row.key}
         data-index={item.index}
+        data-sidebar-virtual-start={item.start}
         ref={virtualizer.measureElement}
         style={{
           position: 'absolute',

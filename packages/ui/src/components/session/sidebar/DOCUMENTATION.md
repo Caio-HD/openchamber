@@ -54,6 +54,21 @@ project tree, with no Recent projection. VS Code excludes worktrees and managed
 Chats, while retaining its workspace-scoped grouped list and inline archived
 buckets.
 
+Both project display modes use `projects/CrossfadeZoneHeaders.tsx` for sticky
+zone headers. The live header keeps one portal host as it moves between its
+virtual row placeholder and a stationary layer inside the native scroller,
+preserving its controls and menu state. The global virtualizer keeps the current
+and adjacent project/activity headers mounted and publishes each row's logical
+start for boundary measurement. Row and header resizing or virtual-start changes
+refresh cached boundaries; scrolling only compares those offsets
+and changes the DOM at a zone handoff. An inert, accessibility-hidden snapshot of
+the outgoing header fades over the incoming header for 150 ms. Reduced motion
+skips the fade. Project dragging temporarily returns headers to their sections
+without remounting controls. Reordering refreshes boundaries using layout offsets
+that include virtual positioning but exclude sortable transforms, so settling
+animations cannot leave stale header positions. The sidebar has no separate
+desktop-only top gradient or identity overlay.
+
 Directory demand always includes known project roots and worktrees. Visibility
 only changes priority. Row mounts must not start bootstrap work. Selection and
 activity subscriptions stay session-scoped so a structural list update does not
@@ -120,8 +135,9 @@ matching and ordering. Search does not fetch sessions or broaden list membership
   without waiting for an unrelated render. Archived groups must not add a
   nested virtualizer.
 - Sticky project/activity identity comes from model header descriptors and the
-  first visible virtual index. DOM sentinels and intersection observers are not
-  authoritative sidebar state.
+  first visible virtual index, which keeps the live current and adjacent header
+  rows mounted. `CrossfadeZoneHeaders` uses their cached virtual layout offsets
+  for the visual handoff. DOM sentinels and intersection observers are not used.
 - Shift selection and Ctrl/Cmd+A consume the model's logical row order. API
   session IDs are deduplicated only at the action boundary, after hidden
   descendants have been included. Selection is cleared on runtime switch and

@@ -23,7 +23,6 @@ import type { ProjectSortOrder } from '@/stores/useSessionDisplayStore';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
 import { Icon } from '@/components/icon/Icon';
 import { SessionFolderItem } from '../../SessionFolderItem';
-import { DirectoryActionIndicator } from '../sessions/DirectoryActionIndicator';
 import { SessionTreeItem } from '../sessions/SessionTreeItem';
 import { computeNodeStructureKey, nodeContainsSessionId } from '../sessions/sessionNodeItemUtils';
 import { DroppableFolderWrapper } from '../folders/sessionFolderDnd';
@@ -32,10 +31,11 @@ import type { SessionGroup } from '../types';
 import { SessionSidebarRows } from '../SessionSidebarRows';
 import { SessionSidebarActivityHeader } from '../sessionSidebarHeaderPresentation';
 import { resolveSessionSidebarStickyHeader, type SessionSidebarRow, type SessionSidebarRowModel } from '../sessionSidebarRowModel';
-import { ProjectHeaderIdentity, SortableGroupItem, SortableProjectItem } from './sortableItems';
+import { SortableGroupItem, SortableProjectItem } from './sortableItems';
 import { SessionGroupSection, type SessionGroupSectionProps } from './SessionGroupSection';
 import type { ProjectSection } from './sessionProjectRender';
 import { formatProjectLabel } from '../utils';
+import { CrossfadeZoneHeader, CrossfadeZoneHeaders } from './CrossfadeZoneHeaders';
 
 type SessionProjectScrollerState = Pick<SessionGroupSectionProps,
   | 'editingId'
@@ -70,9 +70,7 @@ type SessionProjectScrollerModel = {
   rowModel: SessionSidebarRowModel;
   sectionsForRender: ProjectSection[];
   projectSections: ProjectSection[];
-  activeProjectId: string | null;
   singleProjectMode: boolean;
-  singleProjectId: string | null;
   emptyState: React.ReactNode;
   searchEmptyState: React.ReactNode;
   projectRepoStatus: Map<string, boolean | null>;
@@ -82,12 +80,8 @@ type SessionProjectScrollerModel = {
 
 type View = {
   homeDirectory: string | null;
-  collapsedProjects: Set<string>;
-  showOnlyMainWorkspace: boolean;
   hasSessionSearchQuery: boolean;
-  normalizedSessionSearchQuery: string;
   hideDirectoryControls: boolean;
-  isDesktopShellRuntime: boolean;
   stickyZoneHeaders: boolean;
   mobileVariant: boolean;
   alwaysShowActions: boolean;
@@ -111,9 +105,6 @@ type Actions = {
 };
 
 type Props = { model: SessionProjectScrollerModel; view: View; actions: Actions };
-const TOP_FADE_MAX_SIZE = 48;
-const TOP_FADE_MIN_SIZE = 32;
-const TOP_FADE_CLEAR_MAX_SIZE = 24;
 
 const getProjectLabel = (project: ProjectSection['project'], homeDirectory: string | null): string => formatProjectLabel(
   project.label?.trim() || formatDirectoryName(project.normalizedPath, homeDirectory) || project.normalizedPath,
@@ -132,26 +123,16 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
   const [stickyIdentity, setStickyIdentity] = React.useState<string | null>(null);
   const [focusedRowKey, setFocusedRowKey] = React.useState<string | null>(null);
   const [scrollElement, setScrollElement] = React.useState<HTMLElement | null>(null);
-  const topFadeSizeRef = React.useRef(0);
-  const enableStickyFade = view.isDesktopShellRuntime && view.stickyZoneHeaders && !model.singleProjectMode;
+  const [isProjectDragging, setIsProjectDragging] = React.useState(false);
+  const scrollContainerRef = React.useRef<HTMLElement | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-
-  const syncTopFade = React.useCallback((scroller: HTMLElement) => {
-    const size = scroller.scrollTop > 1 ? Math.min(TOP_FADE_MIN_SIZE + scroller.scrollTop, TOP_FADE_MAX_SIZE) : 0;
-    topFadeSizeRef.current = size;
-    const root = scroller.parentElement?.parentElement;
-    root?.style.setProperty('--scroll-shadow-top-size', `${size}px`);
-    root?.style.setProperty('--scroll-shadow-top-clear-size', `${Math.min(Math.max(size - 8, 0), TOP_FADE_CLEAR_MAX_SIZE)}px`);
-  }, []);
-  const blockObscuredInteraction = React.useCallback((event: React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement>) => {
-    if (event.target instanceof Element && event.target.closest('[data-overlay-scrollbar-thumb], [data-sidebar-sticky-header]')) return;
-    if (event.clientY - event.currentTarget.getBoundingClientRect().top >= topFadeSizeRef.current) return;
-    event.preventDefault();
-    event.stopPropagation();
+  const setScrollContainer = React.useCallback((element: HTMLElement | null) => {
+    scrollContainerRef.current = element;
+    setScrollElement(element);
   }, []);
 
   const projectPickerOptions = React.useMemo(() => model.projectSections.map((section) => ({
@@ -163,6 +144,13 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
     projectIconImage: section.project.iconImage,
     projectIconBackground: section.project.iconBackground,
   })), [model.projectSections, view.homeDirectory]);
+
+  const stickyDescriptorIndex = React.useMemo(() => {
+    if (!view.stickyZoneHeaders) return -1;
+    return model.rowModel.stickyHeaders.findIndex(
+      (descriptor) => `${descriptor.kind}:${descriptor.id}` === stickyIdentity,
+    );
+  }, [model.rowModel.stickyHeaders, stickyIdentity, view.stickyZoneHeaders]);
 
   const pinnedRowIndexes = React.useMemo(() => {
     const indexes = new Set<number>();
@@ -177,15 +165,24 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         || model.state.openSidebarMenuKey === `session-menu:${row.key}`
         || model.state.openSidebarMenuKey === `session-context:${row.key}`) indexes.add(index);
     }
+    if (stickyDescriptorIndex >= 0) {
+      const first = Math.max(0, stickyDescriptorIndex - 1);
+      const last = Math.min(model.rowModel.stickyHeaders.length - 1, stickyDescriptorIndex + 1);
+      for (let index = first; index <= last; index += 1) {
+        const descriptor = model.rowModel.stickyHeaders[index];
+        if (descriptor) indexes.add(descriptor.rowIndex);
+      }
+    }
     return indexes;
-  }, [focusedRowKey, model.groupProps.editingRowKey, model.rowModel.rowIndexByKey, model.rowModel.rows, model.state.openSidebarMenuKey]);
+  }, [focusedRowKey, model.groupProps.editingRowKey, model.rowModel.rowIndexByKey, model.rowModel.rows, model.rowModel.stickyHeaders, model.state.openSidebarMenuKey, stickyDescriptorIndex]);
 
   const handleFirstVisibleIndexChange = React.useCallback((index: number) => {
-    if (!enableStickyFade) return;
-    const descriptor = resolveSessionSidebarStickyHeader(model.rowModel.stickyHeaders, index);
+    const descriptor = view.stickyZoneHeaders
+      ? resolveSessionSidebarStickyHeader(model.rowModel.stickyHeaders, index)
+      : null;
     const nextIdentity = descriptor ? `${descriptor.kind}:${descriptor.id}` : null;
     setStickyIdentity((current) => current === nextIdentity ? current : nextIdentity);
-  }, [enableStickyFade, model.rowModel.stickyHeaders]);
+  }, [model.rowModel.stickyHeaders, view.stickyZoneHeaders]);
 
   const renderStatus = React.useCallback((row: Extract<SessionSidebarRow, { kind: 'status' }>) => {
     const retry = () => {
@@ -197,13 +194,20 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
       const result = await requestDirectoryAccess(row.status.directory);
       if (result.success) retry();
     };
-    const label = row.status.state === 'permission-denied'
-      ? t('sessions.sidebar.group.empty.permissionDenied')
-      : row.status.state === 'load-failed'
-        ? t('sessions.sidebar.group.empty.loadFailed')
-        : row.status.state === 'initialization-failed'
-          ? t('sessions.sidebar.group.empty.initializationFailed')
-          : t('sessions.sidebar.group.empty.loadingSessions');
+    let label: string;
+    switch (row.status.state) {
+      case 'permission-denied':
+        label = t('sessions.sidebar.group.empty.permissionDenied');
+        break;
+      case 'load-failed':
+        label = t('sessions.sidebar.group.empty.loadFailed');
+        break;
+      case 'initialization-failed':
+        label = t('sessions.sidebar.group.empty.initializationFailed');
+        break;
+      default:
+        label = t('sessions.sidebar.group.empty.loadingSessions');
+    }
     return <div className="py-1 pl-[26px] text-left typography-micro text-muted-foreground">
       <span className="inline-flex flex-wrap items-center gap-1.5">
         {row.status.state === 'loading' ? <Icon name="loader-4" className="size-3 animate-spin" /> : null}
@@ -216,35 +220,40 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
 
   const renderRow = React.useCallback((row: SessionSidebarRow): React.ReactNode => {
     if (row.kind === 'activity-header') {
-      return <SessionSidebarActivityHeader
-        activityKey={row.activityKey}
-        collapsed={row.collapsed}
-        forceExpanded={row.forceExpanded}
-        alwaysShowActions={view.alwaysShowActions}
-        onToggle={() => model.state.setCollapsedActivityKeys((current) => {
-          const next = new Set(current);
-          if (next.has(row.activityKey)) next.delete(row.activityKey); else next.add(row.activityKey);
-          return next;
-        })}
-        onNewChat={() => {
-          useUIStore.getState().closeMainSurfaces();
-          if (view.mobileVariant) actions.setSessionSwitcherOpen(false);
-          actions.openNewSessionDraft({ selectedProjectId: CHAT_DRAFT_PROJECT_ID, directoryOverride: null });
-        }}
-      />;
+      return <CrossfadeZoneHeader
+        className={view.stickyZoneHeaders ? 'sticky top-0 z-20 bg-sidebar' : undefined}
+        data-sidebar-sticky-header={view.stickyZoneHeaders ? 'true' : undefined}
+      >
+        <SessionSidebarActivityHeader
+          activityKey={row.activityKey}
+          collapsed={row.collapsed}
+          forceExpanded={row.forceExpanded}
+          alwaysShowActions={view.alwaysShowActions}
+          onToggle={() => model.state.setCollapsedActivityKeys((current) => {
+            const next = new Set(current);
+            if (next.has(row.activityKey)) next.delete(row.activityKey); else next.add(row.activityKey);
+            return next;
+          })}
+          onNewChat={() => {
+            useUIStore.getState().closeMainSurfaces();
+            if (view.mobileVariant) actions.setSessionSwitcherOpen(false);
+            actions.openNewSessionDraft({ selectedProjectId: CHAT_DRAFT_PROJECT_ID, directoryOverride: null });
+          }}
+        />
+      </CrossfadeZoneHeader>;
     }
     if (row.kind === 'project-header') {
       const project = row.section.project;
       const label = getProjectLabel(project, view.homeDirectory);
       return <SortableProjectItem
         id={project.id}
-        disabled={row.forceExpanded || model.state.editingId !== null || view.projectSortOrder !== 'manual'}
+        disabled={model.singleProjectMode || row.forceExpanded || model.state.editingId !== null || view.projectSortOrder !== 'manual'}
         projectLabel={label}
         projectDescription={formatPathForDisplay(project.normalizedPath, view.homeDirectory)}
         projectDirectory={project.normalizedPath}
         projectIcon={project.icon} projectColor={project.color} projectIconImage={project.iconImage} projectIconBackground={project.iconBackground}
         isCollapsed={row.collapsed} isRepo={Boolean(model.projectRepoStatus.get(project.id))}
-        isDesktopShell={view.isDesktopShellRuntime} hideDirectoryControls={view.hideDirectoryControls}
+        hideDirectoryControls={view.hideDirectoryControls}
         mobileVariant={view.mobileVariant} alwaysShowActions={view.alwaysShowActions}
         statusIndicator={row.collapsed ? actions.renderProjectStatusIndicator?.(project.id, row.section.groups) : null}
         openSidebarMenuKey={model.state.openSidebarMenuKey} setOpenSidebarMenuKey={model.state.setOpenSidebarMenuKey}
@@ -256,7 +265,6 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         onManageWorktrees={() => actions.openWorktreesPage(project.id)}
         onRenameStart={() => actions.openProjectEditDialog(project.id)}
         onClose={() => actions.removeProject(project.id)}
-        sentinelRef={() => undefined}
         showCreateButtons
       />;
     }
@@ -339,74 +347,70 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
     </div>;
   }, [actions, deleteFolder, model, projectPickerOptions, renameFolder, renderStatus, showDeletionDialog, t, toggleFolderCollapse, view]);
 
-  const sticky = model.rowModel.stickyHeaders.find((descriptor) => `${descriptor.kind}:${descriptor.id}` === stickyIdentity) ?? null;
-  const stickyRow = sticky ? model.rowModel.rows[sticky.rowIndex] : null;
   const structuralIds = React.useMemo(() => model.rowModel.rows.flatMap((row) => row.kind === 'project-header' ? [row.section.project.id] : row.kind === 'group-header' ? [row.groupKey] : []), [model.rowModel.rows]);
+  const projectDragIds = React.useMemo(() => new Set(model.sectionsForRender.map((section) => section.project.id)), [model.sectionsForRender]);
+  const zoneLayoutKey = React.useMemo(() => model.rowModel.stickyHeaders
+    .map(({ kind, id, rowIndex }) => `${kind}:${id}:${rowIndex}`)
+    .join('\u0001'), [model.rowModel.stickyHeaders]);
 
-  return <div
-    className="oc-sticky-fade-root relative flex min-h-0 flex-1"
-    // SAFETY: React's style type does not declare application-owned CSS custom properties.
-    style={enableStickyFade ? { '--scroll-shadow-top-size': '0px' } as React.CSSProperties : undefined}
-    onPointerDownCapture={enableStickyFade ? blockObscuredInteraction : undefined}
-    onClickCapture={enableStickyFade ? blockObscuredInteraction : undefined}
-    onContextMenuCapture={enableStickyFade ? blockObscuredInteraction : undefined}
-  >
-    <ScrollableOverlay
-      ref={setScrollElement} useScrollShadow hideTopScrollShadow={!enableStickyFade} scrollShadowSize={96}
-      outerClassName="flex-1 min-h-0" className="oc-sidebar-scroller oc-sticky-fade-scroller pb-1 pl-2.5 pr-2 [overflow-anchor:none]"
-      onScroll={enableStickyFade ? (event) => syncTopFade(event.currentTarget) : undefined}
+  return <div className="relative flex min-h-0 flex-1">
+    <CrossfadeZoneHeaders
+      enabled={view.stickyZoneHeaders}
+      suspended={isProjectDragging}
+      layoutKey={zoneLayoutKey}
+      scrollRef={scrollContainerRef}
     >
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event) => {
-        if (!event.over) return;
-        // SAFETY: session and folder payloads are created by the sidebar's draggable and droppable row components.
-        const activeData = event.active.data.current as { type?: string; sessionId?: string; ownerKey?: string | null; archivedBucket?: boolean } | undefined;
-        // SAFETY: session and folder payloads are created by the sidebar's draggable and droppable row components.
-        const overData = event.over.data.current as { type?: string; folderId?: string; scopeKey?: string; ownerKey?: string | null } | undefined;
-        if (activeData?.type === 'session' && activeData.sessionId && activeData.ownerKey && activeData.archivedBucket !== true && overData?.type === 'folder' && overData.folderId && overData.scopeKey && overData.ownerKey === activeData.ownerKey) {
-          const dropTarget = model.rowModel.folderDropTargets.find((entry) => entry.folderId === overData.folderId && entry.scopeKey === overData.scopeKey && entry.ownerKey === activeData.ownerKey);
-          const authority = model.rowModel.folderAuthorityByOwner.get(activeData.ownerKey);
-          if (!dropTarget?.enabled || authority?.complete !== true) return;
-          const store = useSessionFoldersStore.getState();
-          for (const scopeKey of authority.scopeKeys) {
-            if (scopeKey !== overData.scopeKey) store.removeSessionFromFolder(scopeKey, activeData.sessionId);
+      <ScrollableOverlay
+        ref={setScrollContainer} useScrollShadow hideTopScrollShadow scrollShadowSize={96}
+        outerClassName="flex-1 min-h-0" className="oc-sidebar-scroller pb-1 pl-2.5 pr-2 [overflow-anchor:none]"
+      >
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={(event) => {
+          setIsProjectDragging(projectDragIds.has(String(event.active.id)));
+        }} onDragCancel={() => setIsProjectDragging(false)} onDragEnd={(event) => {
+          setIsProjectDragging(false);
+          if (!event.over) return;
+          // SAFETY: session and folder payloads are created by the sidebar's draggable and droppable row components.
+          const activeData = event.active.data.current as { type?: string; sessionId?: string; ownerKey?: string | null; archivedBucket?: boolean } | undefined;
+          // SAFETY: session and folder payloads are created by the sidebar's draggable and droppable row components.
+          const overData = event.over.data.current as { type?: string; folderId?: string; scopeKey?: string; ownerKey?: string | null } | undefined;
+          if (activeData?.type === 'session' && activeData.sessionId && activeData.ownerKey && activeData.archivedBucket !== true && overData?.type === 'folder' && overData.folderId && overData.scopeKey && overData.ownerKey === activeData.ownerKey) {
+            const dropTarget = model.rowModel.folderDropTargets.find((entry) => entry.folderId === overData.folderId && entry.scopeKey === overData.scopeKey && entry.ownerKey === activeData.ownerKey);
+            const authority = model.rowModel.folderAuthorityByOwner.get(activeData.ownerKey);
+            if (!dropTarget?.enabled || authority?.complete !== true) return;
+            const store = useSessionFoldersStore.getState();
+            for (const scopeKey of authority.scopeKeys) {
+              if (scopeKey !== overData.scopeKey) store.removeSessionFromFolder(scopeKey, activeData.sessionId);
+            }
+            addSessionToFolder(overData.scopeKey, overData.folderId, activeData.sessionId);
+            return;
           }
-          addSessionToFolder(overData.scopeKey, overData.folderId, activeData.sessionId);
-          return;
-        }
-        if (view.hasSessionSearchQuery || model.state.editingId !== null || event.active.id === event.over.id) return;
-        const activeId = String(event.active.id);
-        const overId = String(event.over.id);
-        const projectIds = model.sectionsForRender.map((section) => section.project.id);
-        const projectFrom = projectIds.indexOf(activeId);
-        const projectTo = projectIds.indexOf(overId);
-        if (projectFrom >= 0 && projectTo >= 0 && view.projectSortOrder === 'manual') {
-          actions.reorderProjects(projectFrom, projectTo);
-          return;
-        }
-        const activeRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === activeId);
-        const overRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === overId);
-        if (!activeRow || !overRow || activeRow.projectId !== overRow.projectId || !activeRow.projectId) return;
-        const section = model.sectionsForRender.find((entry) => entry.project.id === activeRow.projectId);
-        if (!section) return;
-        const from = section.groups.findIndex((group) => group.id === activeRow.group.id);
-        const to = section.groups.findIndex((group) => group.id === overRow.group.id);
-        if (from < 0 || to < 0) return;
-        actions.setGroupOrderByProject((current) => new Map(current).set(activeRow.projectId!, arrayMove(section.groups, from, to).map((group) => group.id)));
-      }}>
-        <SortableContext items={structuralIds} strategy={verticalListSortingStrategy}>
-          <SessionSidebarRows model={model.rowModel} scrollElement={scrollElement} pinnedRowIndexes={pinnedRowIndexes} renderRow={renderRow} onFirstVisibleIndexChange={handleFirstVisibleIndexChange} />
-        </SortableContext>
-      </DndContext>
-    </ScrollableOverlay>
-    {enableStickyFade && stickyRow ? <div className="oc-sticky-fade-overlay pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-1.5 py-1 pl-4 pr-5" data-sidebar-sticky-header="true" aria-hidden="true">
-      {stickyRow.kind === 'project-header' ? <>
-        <ProjectHeaderIdentity id={stickyRow.section.project.id} projectLabel={getProjectLabel(stickyRow.section.project, view.homeDirectory)} projectIcon={stickyRow.section.project.icon} projectColor={stickyRow.section.project.color} projectIconImage={stickyRow.section.project.iconImage} projectIconBackground={stickyRow.section.project.iconBackground} />
-        <DirectoryActionIndicator directory={stickyRow.section.project.normalizedPath} className="ml-auto" />
-      </> : stickyRow.kind === 'activity-header' ? <>
-        <Icon name={stickyRow.activityKey === 'chats' ? 'chat-4' : 'history'} className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/80" />
-        <span className="truncate typography-ui-label font-semibold lowercase text-foreground">{t(stickyRow.activityKey === 'chats' ? 'sessions.sidebar.activity.chatsTitle' : 'sessions.sidebar.activity.recentTitle')}</span>
-      </> : null}
-    </div> : null}
+          if (view.hasSessionSearchQuery || model.state.editingId !== null || event.active.id === event.over.id) return;
+          const activeId = String(event.active.id);
+          const overId = String(event.over.id);
+          const projectIds = model.sectionsForRender.map((section) => section.project.id);
+          const projectFrom = projectIds.indexOf(activeId);
+          const projectTo = projectIds.indexOf(overId);
+          if (projectFrom >= 0 && projectTo >= 0 && view.projectSortOrder === 'manual') {
+            actions.reorderProjects(projectFrom, projectTo);
+            return;
+          }
+          const activeRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === activeId);
+          const overRow = model.rowModel.rows.find((row): row is Extract<SessionSidebarRow, { kind: 'group-header' }> => row.kind === 'group-header' && row.groupKey === overId);
+          if (!activeRow || !overRow || activeRow.projectId !== overRow.projectId || !activeRow.projectId) return;
+          const projectId = activeRow.projectId;
+          const section = model.sectionsForRender.find((entry) => entry.project.id === projectId);
+          if (!section) return;
+          const from = section.groups.findIndex((group) => group.id === activeRow.group.id);
+          const to = section.groups.findIndex((group) => group.id === overRow.group.id);
+          if (from < 0 || to < 0) return;
+          actions.setGroupOrderByProject((current) => new Map(current).set(projectId, arrayMove(section.groups, from, to).map((group) => group.id)));
+        }}>
+          <SortableContext items={structuralIds} strategy={verticalListSortingStrategy}>
+            <SessionSidebarRows model={model.rowModel} scrollElement={scrollElement} pinnedRowIndexes={pinnedRowIndexes} renderRow={renderRow} onFirstVisibleIndexChange={handleFirstVisibleIndexChange} />
+          </SortableContext>
+        </DndContext>
+      </ScrollableOverlay>
+    </CrossfadeZoneHeaders>
     <FolderDeleteConfirmDialog value={folderDeleteConfirm} setValue={setFolderDeleteConfirm} onConfirm={() => {
       if (!folderDeleteConfirm) return;
       deleteFolder(folderDeleteConfirm.scopeKey, folderDeleteConfirm.folderId);
