@@ -42,9 +42,11 @@ bunx openchamber-guest-bundle panel/main.ts panel/main.js
 
 Then install the folder from Settings → Extensions → Add. Folder installs run from your folder, so edit, rebuild, and reload. A `.zip` or an https git or zip link is copied into OpenChamber's data folder instead; ship the built files only. Git installs can update from Settings → Extensions when the repository's `version` is newer than the installed one, so bump `version` to ship an update; `https://…/panel.git#v1` pins a tag or branch.
 
-A complete three-file example is on the [Build an extension](https://openchamber.dev/docs/sdk/) page. Five more are at [github.com/openchamber/openchamber/tree/main/packages/sdk/examples](https://github.com/openchamber/openchamber/tree/main/packages/sdk/examples).
+A complete three-file example is on the [Build an extension](https://openchamber.dev/docs/sdk/) page. Six examples are at [github.com/openchamber/openchamber/tree/main/packages/sdk/examples](https://github.com/openchamber/openchamber/tree/main/packages/sdk/examples).
 
 ## Manifest
+
+Git installs also accept SSH addresses such as `git@github.com:owner/extension.git` and `ssh://git@github.com/owner/extension.git`. The fingerprint menu in Settings → Extensions selects Global Identity or a Git identity on the active server. That identity is reused for update checks and updates. On a remote instance, SSH keys and any unlocked SSH agent must be available to the server process, not just your desktop. See [Extensions](https://docs.openchamber.dev/extensions/) for details.
 
 ```json
 {
@@ -179,6 +181,8 @@ host.onReady((ctx) => {
   });
 });
 ```
+
+OpenChamber supplies thin, theme-aware native scrollbars inside extension documents, including nested lists, tabs, and textareas. The UI kit includes the same defaults for development previews. Existing installed bundles get the host stylesheet without rebuilding. Custom rendering hosts can use `GUEST_SCROLLBAR_CSS` from `@openchamber/sdk`. Authors can override these default rules; an extension's CSP still applies.
 
 ## Schemas
 

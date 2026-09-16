@@ -18,6 +18,7 @@ import {
 import { guestMessageSchema } from '@openchamber/sdk/schemas';
 
 import { useThemeSystem } from '@/contexts/useThemeSystem';
+import { getReadableThemeColors } from '@/lib/theme/readableColors';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { useI18n } from '@/lib/i18n';
@@ -40,7 +41,7 @@ import { guestMay, isGuestActive } from '@/lib/guests/capabilities';
 import { guestFileOperation } from '@/lib/guests/files';
 import { guestGenerate } from '@/lib/guests/generate';
 import { registerGuestResolver, type GuestResolveOutcome } from '@/lib/guests/resolve';
-import { resolveGuestFrameUrl } from '@/lib/guests/frame-url';
+import { useGuestFrameUrl } from '@/lib/guests/useGuestFrameUrl';
 import { useGuestItemStore } from '@/lib/guests/item-store';
 import { fetchHostLinearIssueGet } from '@/lib/guests/host-linear-request';
 import { loadGuestServiceStatus, proxyGuestServiceRequest } from '@/lib/guests/service';
@@ -168,6 +169,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     [currentSessionId, session, sessionBusy],
   );
 
+  const readableColors = React.useMemo(() => getReadableThemeColors(currentTheme), [currentTheme]);
   const ready = React.useMemo<HostReadyContext>(() => ({
     theme: {
       mode: currentTheme.metadata.variant === 'dark' ? 'dark' : 'light',
@@ -185,9 +187,14 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
         mutedSurface: currentTheme.colors.surface.muted,
         elevatedForeground: currentTheme.colors.surface.elevatedForeground,
         active: currentTheme.colors.interactive.active,
-        selectionForeground: currentTheme.colors.interactive.selectionForeground,
+        selectionForeground: readableColors.selectionForeground,
         // Same fallback the app's CSS generator uses for themes without one.
         primaryForeground: currentTheme.colors.primary.foreground ?? '#ffffff',
+        primaryText: readableColors.tinted.primary,
+        successText: readableColors.tinted.success,
+        warningText: readableColors.tinted.warning,
+        errorText: readableColors.tinted.error,
+        infoText: readableColors.tinted.info,
         success: currentTheme.colors.status.success,
         warning: currentTheme.colors.status.warning,
         error: currentTheme.colors.status.error,
@@ -204,34 +211,18 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     connection: oauthStatus?.connection ?? EMPTY_GUEST_CONNECTION,
     settings: oauthStatus?.settings ?? {},
     item,
-  }), [currentTheme, directory, item, locale, oauthStatus, sessionSnapshot, surface]);
+  }), [currentTheme, readableColors, directory, item, locale, oauthStatus, sessionSnapshot, surface]);
 
-  const frameKey = `${guestId}:service-${guest?.service?.granted ? '1' : '0'}`;
+  const frameKey = `${guestId}:${guest?.version ?? ''}:${guestEnabled}:service-${guest?.service?.granted ? '1' : '0'}`;
 
-  // Minted per mount (and per remount via frameKey): the token in this URL is
-  // scoped to the guest's files and short-lived, so it is never reused.
+  // Scoped auth is minted per mount/version/grant and renewed if an existing
+  // iframe navigates after expiry. Healthy documents retain their local state.
   // The attach dialog may load its own page; the rail always loads panel.entry.
   // A page-less guest has no entry and never gets a frame.
   const guestEntry = guest ? (surface === 'page' ? guest.pageEntry ?? null : surface === 'dialog' && guest.attachEntry ? guest.attachEntry : guest.entry ?? null) : null;
-  const [src, setSrc] = React.useState('');
-  React.useEffect(() => {
-    if (!guestEntry) {
-      setSrc('');
-      return;
-    }
-    let cancelled = false;
-    setSrc('');
-    resolveGuestFrameUrl(guestId, guestEntry)
-      .then((url) => {
-        if (!cancelled) setSrc(url);
-      })
-      .catch(() => {
-        // Leave src empty: the pane shows its failed state instead of an unauthenticated frame.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [guestEntry, guestId, frameKey]);
+  const { src, srcDoc, status: frameStatus, recoverExpiredNavigation, acknowledgeHandshake } = useGuestFrameUrl({
+    guestId, entry: guestEntry, instanceKey: frameKey, enabled: guestEnabled,
+  });
 
   const readyRef = React.useRef(ready);
   readyRef.current = ready;
@@ -328,9 +319,8 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     }
   }, [guest, guestEnabled, onDismiss]);
 
-  // Remount when service grant flips so the guest leaves its "unavailable" empty state.
-  // Resolve the frame from the ref on every message: a key remount replaces the
-  // element without changing `src`, so a captured contentWindow would go stale.
+  // Resolve the frame from the ref on every message: auth recovery, version
+  // changes and service grants can replace the element and its contentWindow.
 
   React.useEffect(() => {
     const subscriptions = new Map<string, () => void>();
@@ -339,7 +329,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     const requestingGuestId = guestIdRef.current;
     const currentGuest = () => useGuestsStore.getState().guests.find((entry) => entry.id === requestingGuestId) ?? null;
     const clearSubscriptions = () => { for (const unsubscribe of subscriptions.values()) unsubscribe(); subscriptions.clear(); };
-    const runtimeUnsubscribe = subscribeRuntimeEndpointChanged(() => { disposed = true; clearSubscriptions(); });
+    const runtimeUnsubscribe = subscribeRuntimeEndpointChanged(() => { disposed = true; clearSubscriptions(); stopOauthPoll(); });
     const requireSessions = () => {
       if (!guestMay(currentGuest(), 'sessions')) throw new HostRequestError('NOT_GRANTED', NOT_GRANTED_MESSAGE);
     };
@@ -361,6 +351,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
       }
 
       if (message.type === 'hello') {
+        acknowledgeHandshake();
         clearSubscriptions();
         pushHostState();
         registerResolver();
@@ -456,7 +447,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
           const id = guestIdRef.current;
           const previous = useGuestOauthStore.getState().byId[id]?.connection ?? EMPTY_GUEST_CONNECTION;
           const authorizationUrl = await startGuestOauth(id);
-          if (!authorizationUrl) {
+          if (!authorizationUrl || disposed || getRuntimeKey() !== runtimeKey) {
             return false;
           }
           void openExternalUrl(authorizationUrl);
@@ -477,11 +468,11 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
           return true;
         },
         oauthDisconnect: async () => {
-          const status = await disconnectGuestOauth(guestIdRef.current);
-          if (!status) {
+          const status = await disconnectGuestOauth(requestingGuestId);
+          if (!status || disposed || getRuntimeKey() !== runtimeKey) {
             return false;
           }
-          setOauthStatus(guestIdRef.current, status);
+          setOauthStatus(requestingGuestId, status);
           return true;
         },
         request: async (request) => {
@@ -573,7 +564,7 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
       runtimeUnsubscribe();
       window.removeEventListener('message', onMessage);
     };
-  }, [frameKey, guestEnabled, postToGuest, pushHostState, refreshOauth, registerResolver, setOauthStatus, src, stopOauthPoll]);
+  }, [acknowledgeHandshake, frameKey, guestEnabled, postToGuest, pushHostState, refreshOauth, registerResolver, setOauthStatus, src, srcDoc, stopOauthPoll]);
 
   // The OAuth poll outlives listener re-attachment: it only stops when the
   // frame goes away, otherwise a parent re-render mid-authorization would
@@ -607,10 +598,10 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
     return null;
   }
 
-  if (!guest || !src) {
+  if (!guest || (!src && !srcDoc)) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
-        {t('contextPanel.plugin.loadFailed')}
+        {t(guest && frameStatus === 'loading' ? 'common.loading' : 'contextPanel.plugin.loadFailed')}
       </div>
     );
   }
@@ -624,13 +615,18 @@ export const PluginPane: React.FC<PluginPaneProps> = ({
       ref={iframeRef}
       key={frameKey}
       title={guest.name}
-      src={src}
+      src={src || undefined}
+      srcDoc={srcDoc}
       sandbox="allow-scripts"
       className={cn(
         'h-full w-full min-h-0 min-w-0 border-0 overflow-hidden',
         surface === 'dialog' ? 'bg-transparent' : 'bg-[var(--surface-background)]',
       )}
       onLoad={() => {
+        // A kept-alive iframe can navigate again after its scoped URL token
+        // expires. Recover on navigation, never by periodically reloading a
+        // healthy extension and discarding its in-memory state.
+        if (recoverExpiredNavigation()) return;
         pushHostState();
         registerResolver();
       }}

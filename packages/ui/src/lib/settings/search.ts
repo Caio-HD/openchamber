@@ -72,6 +72,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
+    id: 'appearance.import-theme',
+    page: 'appearance',
+    titleKey: 'settings.themeImport.action',
+    descriptionKey: 'settings.themeImport.catalogHint',
+    keywords: ['theme', 'import', 'vscode', 'open vsx', 'openvsx', 'json', 'jsonc', 'syntax', 'palette'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'appearance.dock-badge',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.dockBadge',
@@ -613,6 +621,12 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['label', 'display name', 'project metadata'],
   },
   {
+    id: 'projects.default-agent',
+    page: 'projects',
+    titleKey: 'settings.projects.page.field.projectAgent',
+    keywords: ['agent', 'default', 'new chat', 'project metadata'],
+  },
+  {
     id: 'projects.default-model',
     page: 'projects',
     titleKey: 'settings.projects.page.field.projectModel',
@@ -1093,6 +1107,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     titleKey: 'settings.extensions.add.label',
     descriptionKey: 'settings.extensions.add.info',
     keywords: ['folder', 'path', 'zip', 'git', 'url', 'install', 'guest', 'panel'],
+    isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
+  },
+  {
+    id: 'extensions.gitIdentity',
+    page: 'extensions',
+    titleKey: 'settings.extensions.identity.title',
+    descriptionKey: 'settings.extensions.add.info',
+    keywords: ['ssh', 'key', 'identity', 'git', 'private', 'clone', 'extension'],
     isAvailable: (ctx) => !ctx.isVSCode && !ctx.isMobile,
   },
   {

@@ -704,6 +704,7 @@ export interface ProjectEntry {
   } | null;
   iconBackground?: string | null;
   color?: string | null;
+  defaultAgent?: string;
   defaultModel?: string;
   /** Variant of `defaultModel`, when that model exposes any. */
   defaultVariant?: string;
@@ -1440,6 +1441,10 @@ export interface ClientAuthAPI {
 }
 
 export interface RuntimeAPIs {
+  /** Native local picker. Web/mobile fall back to their browser file input; VS Code does not import themes. */
+  themeFiles?: {
+    pick(): Promise<{ status: 'unsupported' } | { status: 'picked'; file: { name: string; size: number; text: string } | null }>;
+  };
   runtime: RuntimeDescriptor;
   terminal: TerminalAPI;
   git: GitAPI;

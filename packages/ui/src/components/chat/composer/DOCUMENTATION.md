@@ -185,10 +185,11 @@ makes WebKit re-measure them after every decoration redraw, and the composer
 rebuilds every decoration on every keystroke. That cost is felt worst during
 IME composition.
 
-The non-iOS native selection tint comes from `--primary`, not the selection
-token: themes define `--interactive-selection` with its own alpha, so mixing it
-with transparent again is nearly invisible. The iOS system overlay owns its
-visible selection fill.
+The non-iOS native selection uses `--interactive-selection` directly, including
+its authored alpha, with `--interactive-selection-foreground` for selected text.
+Do not dilute it again or substitute the primary action color. Both composer
+caret paths follow the elevated field foreground; the file editor/terminal cursor
+color may belong to a different background. The iOS system overlay owns its visible selection fill.
 
 The content element keeps the existing correction policy: on in the mobile UI,
 off elsewhere. CodeMirror also reads the attribute and reverts Apple and
@@ -257,6 +258,9 @@ and the send path reading the same grammar.
   them after loading that identity's draft. Selection alone is not enough:
   the deferred chat column can still show the source composer. Ordinary
   pending text insertions keep their existing path in `ChatInput`.
+  The hook also selects the attachment draft before paint. `input-store.ts`
+  owns its in-memory files and scoped send recovery, documented in
+  `packages/ui/src/sync/DOCUMENTATION.md`.
 - `state/useDraftTarget.ts` — the draft can target a directory that does not
   exist yet (a worktree being created). It must survive not appearing in the
   branch list, or the selector snaps back to the project root mid-creation. It
