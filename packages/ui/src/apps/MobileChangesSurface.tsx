@@ -14,6 +14,7 @@ import { branchRefLabel } from '@/components/views/git/baseBranch';
 import { isBranchScopeAvailable, isBranchScopeDefinitelyUnavailable, useRangeKeyedCache } from '@/components/views/branchDiffScope';
 import { CommitSection } from '@/components/views/git/CommitSection';
 import { DirtyBranchSwitchDialog } from '@/components/views/git/DirtyBranchSwitchDialog';
+import { pushCommittedChanges } from '@/components/views/git/commitAndPush';
 import { SyncActions } from '@/components/views/git/SyncActions';
 import { PierreDiffViewer } from '@/components/views/PierreDiffViewer';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
@@ -429,34 +430,30 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     if (!currentDirectory) return;
     setSyncAction(action);
     try {
-      const getPullOptions = (pullRemote: GitRemote) => {
-        const trackingPrefix = `${pullRemote.name}/`;
-        const trackedBranch = status?.tracking?.startsWith(trackingPrefix)
-          ? status.tracking.slice(trackingPrefix.length)
-          : undefined;
-        return { remote: pullRemote.name, branch: trackedBranch, rebase: true };
-      };
-
       if (action === 'fetch') {
         if (!remote) throw new Error(t('mobile.changes.noRemote'));
         await git.gitFetch(currentDirectory, { remote: remote.name });
         toast.success(t('gitView.toast.fetchedFromRemote', { name: remote.name }));
       } else if (action === 'sync') {
         if (!remote) throw new Error(t('mobile.changes.noRemote'));
-        await git.gitFetch(currentDirectory, { remote: remote.name });
-        const afterFetch = await git.getGitStatus(currentDirectory);
-        if ((afterFetch.behind ?? 0) > 0) {
-          if ((afterFetch.files?.length ?? 0) > 0) {
-            toast.error(t('gitView.toast.commitOrStashBeforeSync'));
-            return;
-          }
-          await git.gitPull(currentDirectory, getPullOptions(remote));
+        let pulledFileCount = 0;
+        const result = await pushCommittedChanges({
+          git,
+          directory: currentDirectory,
+          remote,
+          dirtyWorktreeError: t('gitView.toast.commitOrStashBeforeSync'),
+          onPulled: (pullResult) => { pulledFileCount = pullResult.files.length; },
+        });
+        if (pulledFileCount > 0) {
+          toast.success(pulledFileCount === 1
+            ? t('gitView.toast.pulledFilesSingle', { count: pulledFileCount, name: remote.name })
+            : t('gitView.toast.pulledFilesPlural', { count: pulledFileCount, name: remote.name }));
         }
-        const afterPull = await git.getGitStatus(currentDirectory);
-        if ((afterPull.ahead ?? 0) > 0) {
-          await git.gitPush(currentDirectory);
+        if (result.pushed.length > 0) {
+          toast.success(t('gitView.toast.pushedToUpstream', { name: result.pushed[0].remote }));
+        } else if (pulledFileCount === 0) {
+          toast.success(t('gitView.toast.alreadyUpToDate'));
         }
-        toast.success(t('gitView.toast.alreadyUpToDate'));
       }
       await refreshStatusAndBranches(false);
       await refreshRemotes();
@@ -579,21 +576,15 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
         const remote = effectiveRemotes.find((entry) => entry.name === trackingRemoteName) ?? effectiveRemotes[0];
         if (!remote) throw new Error(t('mobile.changes.noRemote'));
         setSyncAction('sync');
-        const trackingPrefix = `${remote.name}/`;
-        const trackedBranch = status?.tracking?.startsWith(trackingPrefix)
-          ? status.tracking.slice(trackingPrefix.length)
-          : undefined;
-
-        await git.gitFetch(currentDirectory, { remote: remote.name });
-        const afterFetch = await git.getGitStatus(currentDirectory);
-        if ((afterFetch.behind ?? 0) > 0) {
-          await git.gitPull(currentDirectory, { remote: remote.name, branch: trackedBranch, rebase: true });
-        }
-
-        const afterPull = await git.getGitStatus(currentDirectory);
-        if ((afterPull.ahead ?? 0) > 0) {
-          await git.gitPush(currentDirectory);
-        }
+        await pushCommittedChanges({
+          git,
+          directory: currentDirectory,
+          remote,
+          dirtyWorktreeError: t('gitView.toast.commitOrStashBeforeSync'),
+          onPushed: (result) => {
+            toast.success(t('gitView.toast.pushedToUpstream', { name: result.pushed[0].remote }));
+          },
+        });
 
         await refreshStatusAndBranches(false);
         await refreshRemotes();
