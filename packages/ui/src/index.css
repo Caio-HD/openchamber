@@ -1784,6 +1784,19 @@ textarea[data-terminal-hidden-input="true"]::placeholder {
   animation: oc-busy-pulse 1.2s ease-in-out infinite;
 }
 
+/*
+ * The staggered dots of a busy indicator that stays on screen for as long as
+ * the agent works. A smooth opacity pulse is composited, yet it still makes
+ * the compositor and the GPU process draw sixty frames a second: about ten
+ * percent of a core on an otherwise still page. Three steps per half cycle
+ * last 200ms each, the same as the stagger between dots, so every dot changes
+ * on the same five frames a second, which halves that cost. Keep the stagger
+ * a multiple of one step or the dots stop sharing frames.
+ */
+.animate-busy-wave {
+  animation: oc-busy-pulse 1.2s steps(3, jump-none) infinite;
+}
+
 @keyframes navrail-dot-wave {
   0%, 100% {
     transform: scale(0.72);
@@ -1904,7 +1917,8 @@ textarea[data-terminal-hidden-input="true"]::placeholder {
     display: none;
   }
 
-  .animate-busy-pulse {
+  .animate-busy-pulse,
+  .animate-busy-wave {
     animation: none;
   }
 
