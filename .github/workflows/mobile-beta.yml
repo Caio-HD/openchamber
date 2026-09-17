@@ -152,10 +152,12 @@ jobs:
             exit 1
           fi
 
+          node scripts/changelog/generate-beta-notes.mjs --version "$VERSION_NAME" --build "$BUILD_NUMBER" --output "$RUNNER_TEMP/beta-notes.md"
+
           # Create prerelease tag & release on GitHub
           gh release create "$RELEASE_TAG" "$APK_PATH" "$AAB_PATH" \
             --title "OpenChamber Android Beta v${VERSION_NAME}" \
-            --notes "Automated beta build #${BUILD_NUMBER} for Android." \
+            --notes-file "$RUNNER_TEMP/beta-notes.md" \
             --prerelease \
             --repo "${{ github.repository }}"
 

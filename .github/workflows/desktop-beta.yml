@@ -426,9 +426,11 @@ jobs:
             exit 0
           fi
 
+          node scripts/changelog/generate-beta-notes.mjs --version "$VERSION_NAME" --build "$BUILD_NUMBER" --output "$RUNNER_TEMP/beta-notes.md"
+
           gh release create "$RELEASE_TAG" release-files/* \
             --title "OpenChamber Desktop & Extension Beta v${VERSION_NAME}" \
-            --notes "Automated multi-platform beta build #${BUILD_NUMBER} for macOS, Windows, Linux, VS Code, and Web CLI." \
+            --notes-file "$RUNNER_TEMP/beta-notes.md" \
             --prerelease \
             --repo "${{ github.repository }}"
 
