@@ -227,13 +227,13 @@ export const useUpdateStore = create<UpdateStore>()((set, get) => ({
           checkForWebUpdates('desktop', appVersion),
         ]);
         const desktopInfo = desktopResult.status === 'fulfilled' ? desktopResult.value : null;
-        suggestedSec = apiResult.status === 'fulfilled'
-          ? (apiResult.value?.nextSuggestedCheckInSec ?? null)
-          : null;
+        const apiInfo = apiResult.status === 'fulfilled' ? apiResult.value : null;
+        const resolvedInfo = (desktopInfo?.available ? desktopInfo : null) || (apiInfo?.available ? apiInfo : null) || desktopInfo || apiInfo;
+        suggestedSec = apiInfo?.nextSuggestedCheckInSec ?? null;
         set({
           checking: false,
-          available: desktopInfo?.available ?? false,
-          info: desktopInfo,
+          available: resolvedInfo?.available ?? false,
+          info: resolvedInfo,
           lastChecked: Date.now(),
           nextCheckInSec: suggestedSec,
         });
