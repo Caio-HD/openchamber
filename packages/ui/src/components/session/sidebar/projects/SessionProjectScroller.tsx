@@ -36,6 +36,7 @@ import { SessionGroupSection, type SessionGroupSectionProps } from './SessionGro
 import type { ProjectSection } from './sessionProjectRender';
 import { formatProjectLabel } from '../utils';
 import { CrossfadeZoneHeader, CrossfadeZoneHeaders } from './CrossfadeZoneHeaders';
+import { prepareSessionProjectAction } from './sessionProjectActionContext';
 
 type SessionProjectScrollerState = Pick<SessionGroupSectionProps,
   | 'editingId'
@@ -260,8 +261,26 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         projectPickerOptions={model.singleProjectMode ? projectPickerOptions : undefined}
         onProjectSelect={model.singleProjectMode ? actions.setSingleProjectId : undefined}
         onToggle={() => { if (!row.forceExpanded && !model.singleProjectMode) actions.toggleProject(project.id); }}
-        onNewSession={() => { actions.setActiveProjectIdOnly(project.id); actions.openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: project.normalizedPath }); }}
-        onNewWorktreeSession={actions.openNewWorktreeDialog}
+        onNewSession={() => {
+          prepareSessionProjectAction({
+            projectId: project.id,
+            mobileVariant: view.mobileVariant,
+            closeMobileSwitcher: true,
+            setActiveProjectIdOnly: actions.setActiveProjectIdOnly,
+            setSessionSwitcherOpen: actions.setSessionSwitcherOpen,
+          });
+          actions.openNewSessionDraft({ selectedProjectId: project.id, directoryOverride: project.normalizedPath });
+        }}
+        onNewWorktreeSession={() => {
+          prepareSessionProjectAction({
+            projectId: project.id,
+            mobileVariant: view.mobileVariant,
+            closeMobileSwitcher: false,
+            setActiveProjectIdOnly: actions.setActiveProjectIdOnly,
+            setSessionSwitcherOpen: actions.setSessionSwitcherOpen,
+          });
+          actions.openNewWorktreeDialog();
+        }}
         onManageWorktrees={() => actions.openWorktreesPage(project.id)}
         onRenameStart={() => actions.openProjectEditDialog(project.id)}
         onClose={() => actions.removeProject(project.id)}
@@ -302,7 +321,16 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
           onRenameDraftChange={model.groupProps.setFolderRenameDraft}
           onRenameSave={() => { const draft = model.groupProps.folderRename?.draft.trim(); if (draft) renameFolder(row.scopeKey, row.folder.id, draft); model.groupProps.clearFolderRename(); }}
           onRenameCancel={model.groupProps.clearFolderRename} droppableRef={droppableRef} isDropTarget={isDropTarget}
-          onNewSession={() => actions.openNewSessionDraft({ selectedProjectId: row.projectId, directoryOverride: row.scopeDirectory ?? row.group.directory, targetFolderId: row.folder.id, target: row.group.draftTarget })}
+          onNewSession={() => {
+            prepareSessionProjectAction({
+              projectId: row.projectId,
+              mobileVariant: view.mobileVariant,
+              closeMobileSwitcher: true,
+              setActiveProjectIdOnly: actions.setActiveProjectIdOnly,
+              setSessionSwitcherOpen: actions.setSessionSwitcherOpen,
+            });
+            actions.openNewSessionDraft({ selectedProjectId: row.projectId, directoryOverride: row.scopeDirectory ?? row.group.directory, targetFolderId: row.folder.id, target: row.group.draftTarget });
+          }}
           archivedBucket={row.archived}
         />}
       </DroppableFolderWrapper>;
