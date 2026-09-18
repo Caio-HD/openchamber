@@ -392,10 +392,8 @@ const buildLocalTtsVoiceOptions = (models: DictationModelState[]): LocalTtsVoice
 const LocalTtsModelStatus = ({ models, requestingId, request }: ReturnType<typeof useLocalTtsModels>) => {
     const { t } = useI18n();
 
-    // The default English model is always listed; language models the server
-    // fetched on its own appear once they are installed or downloading, so
-    // the list shows what is on disk rather than the whole catalog.
-    const visible = models.filter((model) => model.id === LOCAL_TTS_MODEL_ID || model.installed || model.downloading);
+    // Show all available models in the catalog so users can discover and download them.
+    const visible = models;
     if (visible.length === 0) {
         return null;
     }
